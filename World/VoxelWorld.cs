@@ -1,11 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 
 namespace VoxelEngine_Silk.Net_1._0.World;
 
 public class VoxelWorld
 {
-    public Dictionary<(int, int), Chunk> Chunks = new();
+    public ConcurrentDictionary<(int, int), Chunk> Chunks = new();
     // Noise Generators
     public FastNoiseLite HeightNoise = new();
     public FastNoiseLite TempNoise = new();

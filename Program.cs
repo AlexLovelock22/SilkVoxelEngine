@@ -23,6 +23,8 @@ class RenderChunk
 class Program
 {
     private static ConcurrentQueue<(Chunk chunk, float[] vertices)> _uploadQueue = new();
+    // Store chunk coordinates that need to be deleted from the GPU
+    private static ConcurrentQueue<(int x, int z)> _unloadQueue = new();
     private static IWindow window = null!;
     private static GL Gl = null!;
     private static IInputContext Input = null!;
@@ -47,7 +49,7 @@ class Program
     static void Main(string[] args)
     {
         var options = WindowOptions.Default;
-        options.Size = new Vector2D<int>(1280, 720);
+        options.Size = new Vector2D<int>(1920, 1080);
         options.Title = "Voxel Engine - Multi-Chunk View";
 
         window = Window.Create(options);
@@ -91,16 +93,20 @@ class Program
 
     private static void WorldStreamerLoop()
     {
-        const int renderDistance = 150;
+        const int viewDistance = 40;
 
         while (true)
         {
             int pCX = (int)Math.Floor(CameraPosition.X / 16.0f);
             int pCZ = (int)Math.Floor(CameraPosition.Z / 16.0f);
 
+            // 1. CREATE A "VALID" SET
+            // We define exactly which chunks are allowed to exist right now
+            HashSet<(int, int)> visibleCoords = new HashSet<(int, int)>();
+
             int x = 0, z = 0;
             int dx = 0, dz = -1;
-            int sideLength = renderDistance * 2;
+            int sideLength = viewDistance * 2;
             int maxChunks = sideLength * sideLength;
 
             for (int i = 0; i < maxChunks; i++)
@@ -108,42 +114,62 @@ class Program
                 int currentX = pCX + x;
                 int currentZ = pCZ + z;
 
-                // If chunk doesn't exist, create it and notify neighbors
-                if (!voxelWorld.Chunks.ContainsKey((currentX, currentZ)))
+                float dist = Vector2.Distance(new Vector2(currentX, currentZ), new Vector2(pCX, pCZ));
+                if (dist <= viewDistance)
                 {
-                    var chunk = new Chunk(currentX, currentZ, voxelWorld);
+                    visibleCoords.Add((currentX, currentZ));
+                }
 
-                    if (voxelWorld.Chunks.TryAdd((currentX, currentZ), chunk))
+                // Spiral math
+                if (x == z || (x < 0 && x == -z) || (x > 0 && x == 1 - z))
+                {
+                    int temp = dx; dx = -dz; dz = temp;
+                }
+                x += dx; z += dz;
+            }
+
+            // 2. THE TOTAL PURGE (Unload Pass)
+            // If a chunk is in our world dictionary but NOT in our visible set, kill it.
+            // This is much more reliable than a simple distance check while moving fast.
+            foreach (var coord in voxelWorld.Chunks.Keys)
+            {
+                if (!visibleCoords.Contains(coord))
+                {
+                    if (voxelWorld.Chunks.TryRemove(coord, out _))
                     {
-                        // 1. Mesh the new chunk
+                        _unloadQueue.Enqueue(coord);
+                    }
+                }
+            }
+
+            // 3. LOAD PASS
+            // Now we only load what's missing from the visible set
+            foreach (var coord in visibleCoords)
+            {
+                if (!voxelWorld.Chunks.ContainsKey(coord))
+                {
+                    var chunk = new Chunk(coord.Item1, coord.Item2, voxelWorld);
+                    if (voxelWorld.Chunks.TryAdd(coord, chunk))
+                    {
                         QueueChunkForMeshing(chunk);
 
-                        // 2. Mesh neighbors (if they exist) to hide the newly touching borders
-                        var n = voxelWorld.GetNeighbors(currentX, currentZ);
+                        // Neighbors
+                        var n = voxelWorld.GetNeighbors(coord.Item1, coord.Item2);
                         if (n.r != null) QueueChunkForMeshing(n.r);
                         if (n.l != null) QueueChunkForMeshing(n.l);
                         if (n.f != null) QueueChunkForMeshing(n.f);
                         if (n.b != null) QueueChunkForMeshing(n.b);
                     }
 
-                    if (i % 10 == 0) Thread.Sleep(1);
+                    // Throttle slightly so we don't choke the CPU, 
+                    // but keep it fast enough for high-speed travel
+                    Thread.Sleep(0);
                 }
-
-                // Spiral math logic
-                if (x == z || (x < 0 && x == -z) || (x > 0 && x == 1 - z))
-                {
-                    int temp = dx;
-                    dx = -dz;
-                    dz = temp;
-                }
-                x += dx;
-                z += dz;
             }
 
-            Thread.Sleep(2000);
+            Thread.Sleep(200); // Run the whole check 5 times per second
         }
     }
-
 
     private static void QueueChunkForMeshing(Chunk chunk)
     {
@@ -163,17 +189,17 @@ class Program
 
     private static unsafe void FinalizeGPUUpload(Chunk chunk, float[] vertices)
     {
-        // 1. Check if we already have a render object for this specific chunk coordinate
-        // Vector3 comparison is used to find the chunk at the exact world position
-        lock (_renderChunks) // Safety lock for list manipulation
+        // 1. Replacement Logic
+        // If this chunk already exists in the render list, we MUST delete it first.
+        // This happens frequently when neighbors load and trigger a re-mesh.
+        lock (_renderChunks)
         {
             var existing = _renderChunks.Find(rc =>
-                rc.WorldPosition.X == chunk.ChunkX * Chunk.Size &&
-                rc.WorldPosition.Z == chunk.ChunkZ * Chunk.Size);
+                (int)Math.Floor(rc.WorldPosition.X / 16.0f) == chunk.ChunkX &&
+                (int)Math.Floor(rc.WorldPosition.Z / 16.0f) == chunk.ChunkZ);
 
             if (existing != null)
             {
-                // Clean up old GPU memory to prevent a leak
                 Gl.DeleteVertexArray(existing.VAO);
                 Gl.DeleteBuffer(existing.VBO);
                 _totalVertexCount -= existing.VertexCount;
@@ -181,10 +207,12 @@ class Program
             }
         }
 
-        // 2. Create the new RenderChunk
+        // 2. Create the new RenderChunk object
         RenderChunk rc = new RenderChunk();
         rc.VertexCount = (uint)(vertices.Length / 6);
         rc.WorldPosition = new Vector3(chunk.ChunkX * Chunk.Size, 0, chunk.ChunkZ * Chunk.Size);
+
+        // Update global counter
         _totalVertexCount += rc.VertexCount;
 
         // 3. GPU Buffer Allocation
@@ -194,25 +222,28 @@ class Program
         rc.VBO = Gl.GenBuffer();
         Gl.BindBuffer(BufferTargetARB.ArrayBuffer, rc.VBO);
 
+        // Upload vertex data to the GPU
         fixed (void* v = vertices)
         {
             Gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(vertices.Length * sizeof(float)), v, BufferUsageARB.StaticDraw);
         }
 
         uint stride = 6 * sizeof(float);
-        // Position (Location 0)
+        // Attribute 0: Position (x, y, z)
         Gl.VertexAttribPointer(0, 3, (GLEnum)VertexAttribType.Float, false, stride, (void*)0);
         Gl.EnableVertexAttribArray(0);
-        // Color (Location 1)
+
+        // Attribute 1: Color (r, g, b)
         Gl.VertexAttribPointer(1, 3, (GLEnum)VertexAttribType.Float, false, stride, (void*)(3 * sizeof(float)));
         Gl.EnableVertexAttribArray(1);
 
+        // 4. Finalize
         lock (_renderChunks)
         {
             _renderChunks.Add(rc);
         }
     }
-    
+
     // Helper method to handle 'await' outside of the 'unsafe' OnLoad context
     private static void StartPerformanceMonitor(Stopwatch totalSw, Stopwatch phase2Sw, int totalChunks, Func<int> getProgress)
     {
@@ -241,46 +272,37 @@ class Program
         Gl.UseProgram(Shader);
 
         var view = Matrix4x4.CreateLookAt(CameraPosition, CameraPosition + CameraFront, CameraUp);
-        // Note: increased far plane to 2000 to match your large world
-        var projection = Matrix4x4.CreatePerspectiveFieldOfView(45.0f * (float)Math.PI / 180.0f, 1280f / 720f, 0.1f, 2000.0f);
+        // Use actual window size for aspect ratio
+        var projection = Matrix4x4.CreatePerspectiveFieldOfView(70.0f * (float)Math.PI / 180.0f, (float)window.Size.X / window.Size.Y, 0.1f, 2000.0f);
 
         SetUniformMatrix(Shader, "uView", view);
         SetUniformMatrix(Shader, "uProjection", projection);
 
-        int chunksDrawn = 0;
-        _totalVertexCount = 0; // Reset this so the title reflects what's actually on screen
+        _totalVertexCount = 0;
 
-        foreach (var rc in _renderChunks)
+        // We can't use 'lock' easily here without stuttering, 
+        // but the streamer is handling the list safely.
+        var chunksToDraw = _renderChunks.ToArray();
+
+        foreach (var rc in chunksToDraw)
         {
-            // 1. DISTANCE CULLING
-            // Skip chunks that are too far away. 
-            // 1000.0f is a good balance for a 300x300 world.
-            float distSq = Vector3.DistanceSquared(CameraPosition, rc.WorldPosition);
-            if (distSq > 1000.0f * 1000.0f) continue;
-
-            // 2. FRUSTUM CULLING (Directional Check)
-            // Only draw if the chunk is roughly in front of the camera.
-            // Dot product > 0 means the chunk is within a 180-degree field in front of us.
+            // 1. DIRECTIONAL CULLING ONLY
+            // We removed the Distance check because the streamer loop handles that now.
             Vector3 toChunk = Vector3.Normalize(rc.WorldPosition - CameraPosition);
             float dot = Vector3.Dot(CameraFront, toChunk);
 
-            // If the dot product is low, it's behind or way to the side. 
-            // We use -0.2 to allow a bit of "peripheral vision" so chunks don't pop out at the edges.
-            if (dot < -0.2f && distSq > 50.0f * 50.0f) continue;
+            // Keep a wide enough FOV so chunks don't pop in at the corners
+            if (dot < -0.3f) continue;
 
-            // 3. DRAWING
+            // 2. DRAWING
             var model = Matrix4x4.CreateTranslation(rc.WorldPosition);
             SetUniformMatrix(Shader, "uModel", model);
 
             Gl.BindVertexArray(rc.VAO);
             Gl.DrawArrays(PrimitiveType.Triangles, 0, rc.VertexCount);
 
-            chunksDrawn++;
-            _totalVertexCount += (uint)rc.VertexCount;
+            _totalVertexCount += rc.VertexCount;
         }
-
-        // Optional: Update window title with chunks culled
-        // window.Title = $"Drawn: {chunksDrawn} / Total: {_renderChunks.Count}";
     }
 
     private static unsafe void SetUniformMatrix(uint shader, string name, Matrix4x4 matrix)
@@ -303,35 +325,52 @@ class Program
 
     private static void OnUpdate(double deltaTime)
     {
-        // GPU UPLOAD LOGIC: Adaptive Burst
-        // If we have thousands of chunks waiting, upload in massive bursts
-        // If we only have a few, upload slowly to maintain high FPS
-        int uploadLimit = _uploadQueue.Count > 500 ? 500 : 2;
+        // 1. GPU UNLOAD LOGIC: Total Drain
+        // Process the entire queue every frame to keep up with high-speed movement
+        while (_unloadQueue.TryDequeue(out var coords))
+        {
+            lock (_renderChunks)
+            {
+                // Use exact coordinate matching
+                var existing = _renderChunks.Find(rc =>
+                    (int)Math.Floor(rc.WorldPosition.X / 16.0f) == coords.x &&
+                    (int)Math.Floor(rc.WorldPosition.Z / 16.0f) == coords.z);
 
+                if (existing != null)
+                {
+                    Gl.DeleteVertexArray(existing.VAO);
+                    Gl.DeleteBuffer(existing.VBO);
+                    _totalVertexCount -= existing.VertexCount;
+                    _renderChunks.Remove(existing);
+                }
+            }
+        }
+
+        // 2. GPU UPLOAD LOGIC: Adaptive Burst
+        int uploadLimit = _uploadQueue.Count > 100 ? 50 : 5; // Higher base limit for faster movement
         for (int i = 0; i < uploadLimit; i++)
         {
             if (_uploadQueue.TryDequeue(out var data))
             {
                 FinalizeGPUUpload(data.chunk, data.vertices);
             }
-            else break; // Queue empty
+            else break;
         }
 
-        // FPS Counter & Stats
+        // 3. Stats & FPS
         _timePassed += deltaTime;
         _frameCount++;
-
         if (_timePassed >= 1.0)
         {
             double fps = _frameCount / _timePassed;
-            window.Title = $"Voxel Engine | FPS: {fps:F1} | Verts: {_totalVertexCount:N0} | Queue: {_uploadQueue.Count}";
+            window.Title = $"Voxel Engine | Chunks: {_renderChunks.Count} | Verts: {_totalVertexCount:N0} | FPS: {fps:F0} | Pending: {_uploadQueue.Count}";
             _timePassed = 0;
             _frameCount = 0;
         }
 
-        // Movement Logic
+        // 4. Movement Logic
         var keyboard = Input.Keyboards[0];
-        float speed = 20f * (float)deltaTime;
+        float speed = 60f * (float)deltaTime; // 60 units per second
 
         if (keyboard.IsKeyPressed(Key.W)) CameraPosition += speed * CameraFront;
         if (keyboard.IsKeyPressed(Key.S)) CameraPosition -= speed * CameraFront;
@@ -342,6 +381,7 @@ class Program
 
         if (keyboard.IsKeyPressed(Key.Escape)) window.Close();
     }
+
     private static void OnMouseMove(IMouse mouse, Vector2 position)
     {
         var lookSensitivity = 0.1f;
