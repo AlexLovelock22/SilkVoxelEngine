@@ -49,11 +49,10 @@ public class VoxelWorld
 
         if (Chunks.TryGetValue((cx, cz), out var chunk))
         {
-            // Simple bounds check for Y (since we don't have vertical chunks yet)
-            if (y < 0 || y >= Chunk.Size) return 0;
+            // FIX: Change Size (16) to Height (256)
+            if (y < 0 || y >= Chunk.Height) return 0;
             return chunk.Blocks[lx, y, lz];
         }
-
-        return 0; // Air
+        return 0;
     }
 }

@@ -38,29 +38,52 @@ public class Chunk
                 float worldX = (ChunkX * Size) + x;
                 float worldZ = (ChunkZ * Size) + z;
 
-                // 2. Get climate values
-                float temp = (world.TempNoise.GetNoise(worldX, worldZ) + 1f) / 2f;
-                float humidity = (world.HumidityNoise.GetNoise(worldX, worldZ) + 1f) / 2f;
+                // --- SMOOTH BIOME BLENDING LOGIC ---
+                float totalHeight = 0;
+                float totalWeight = 0;
 
-                // 3. Determine Biome and get settings
-                var biomeType = BiomeManager.DetermineBiome(temp, humidity);
-                var settings = BiomeManager.GetSettings(biomeType);
+                // Sample a 3x3 area around the current block (offsets of -4, 0, 4)
+                // Sampling slightly further away creates a smoother, more natural slope.
+                for (int ox = -1; ox <= 1; ox++)
+                {
+                    for (int oz = -1; oz <= 1; oz++)
+                    {
+                        float sampleX = worldX + (ox * 4);
+                        float sampleZ = worldZ + (oz * 4);
 
-                // 4. Calculate height
-                world.HeightNoise.SetFrequency(settings.Frequency);
-                float noiseHeight = world.HeightNoise.GetNoise(worldX, worldZ);
+                        // Get climate for the sampled point
+                        float temp = (world.TempNoise.GetNoise(sampleX, sampleZ) + 1f) / 2f;
+                        float humidity = (world.HumidityNoise.GetNoise(sampleX, sampleZ) + 1f) / 2f;
 
-                int finalHeight = (int)(settings.BaseHeight + (noiseHeight * settings.Variation));
+                        // Determine biome at this point
+                        var biomeType = BiomeManager.DetermineBiome(temp, humidity);
+                        var settings = BiomeManager.GetSettings(biomeType);
+
+                        // Use current worldX/Z for the noise itself to keep the terrain "texture" consistent
+                        world.HeightNoise.SetFrequency(settings.Frequency);
+                        float noiseHeight = world.HeightNoise.GetNoise(worldX, worldZ);
+
+                        float h = settings.BaseHeight + (noiseHeight * settings.Variation);
+
+                        // Higher weight for the center sample
+                        float weight = (ox == 0 && oz == 0) ? 1.0f : 0.5f;
+                        totalHeight += h * weight;
+                        totalWeight += weight;
+                    }
+                }
+
+                // Calculate the blended final height
+                int finalHeight = (int)(totalHeight / totalWeight);
                 finalHeight = Math.Clamp(finalHeight, 0, Height - 1);
+                // -----------------------------------
 
-                // 5. Update HeightMap and HighestPoint tracking (Used for Meshing optimization)
+                // 2. Update optimizations (Used for Meshing and faster lookups)
                 _heightMap[x, z] = finalHeight;
                 if (finalHeight > _highestPoint)
                     _highestPoint = finalHeight;
 
-                // 6. THE PRO OPTIMIZATION: Fill ONLY up to the surface
-                // We skip the 'else' block and the rest of the loop entirely.
-                // Since the array is 0-initialized, everything above this is already Air.
+                // 3. THE PRO OPTIMIZATION: Fill ONLY up to the surface
+                // The array is already 0-initialized, so everything above finalHeight is Air.
                 for (int y = 0; y <= finalHeight; y++)
                 {
                     Blocks[x, y, z] = 1;
@@ -123,35 +146,72 @@ public class Chunk
         }
 
         // 2. SIDES AND BOTTOM (Optimized Vertical Loop)
+        // 2. SIDES (Greedy Vertical Meshing)
         for (int x = 0; x < Size; x++)
         {
             for (int z = 0; z < Size; z++)
             {
-                // OPTIMIZATION: Instead of looping 0 to 255 every time, 
-                // we only loop up to the surface height of this specific column.
                 int columnTop = GetSurfaceHeight(x, z);
                 if (columnTop < 0) continue;
 
-                for (int y = 0; y <= columnTop; y++)
+                // We process each of the 4 side directions separately to find vertical strips
+                // 0: Left, 1: Right, 2: Front, 3: Back
+                for (int side = 0; side < 4; side++)
                 {
-                    if (Blocks[x, y, z] == 0) continue;
-
-                    // Check neighbors (IsAir now uses Height boundary checks)
-                    bool down = IsAir(x, y - 1, z, right, left, front, back);
-                    bool leftF = IsAir(x - 1, y, z, right, left, front, back);
-                    bool rightF = IsAir(x + 1, y, z, right, left, front, back);
-                    bool frontF = IsAir(x, y, z + 1, right, left, front, back);
-                    bool backF = IsAir(x, y, z - 1, right, left, front, back);
-
-                    if (down || leftF || rightF || frontF || backF)
+                    for (int y = 0; y <= columnTop; y++)
                     {
-                        AddCubeSides(vertices, x, y, z, down, leftF, rightF, frontF, backF);
+                        if (Blocks[x, y, z] == 0) continue;
+
+                        // 1. Determine which neighbor to check based on the side
+                        int nx = x, nz = z;
+                        if (side == 0) nx--;
+                        else if (side == 1) nx++;
+                        else if (side == 2) nz++; else if (side == 3) nz--;
+
+                        // 2. Only start a greedy strip if this face is visible (IsAir)
+                        if (IsAir(nx, y, nz, right, left, front, back))
+                        {
+                            int startY = y;
+                            int height = 1;
+
+                            // 3. Look UP to see how many identical faces we can merge vertically
+                            while (y + 1 <= columnTop &&
+                                   Blocks[x, y + 1, z] != 0 &&
+                                   IsAir(nx, y + 1, nz, right, left, front, back))
+                            {
+                                height++;
+                                y++; // Skip these blocks in the main 'y' loop
+                            }
+
+                            // 4. Add ONE tall quad for the entire vertical strip
+                            AddVerticalGreedySide(vertices, x, startY, z, height, side);
+                        }
                     }
                 }
+
+                // OPTIMIZATION: Removed the 'down' face check entirely. 
+                // This stops rendering the underside of the world.
             }
         }
-
         return vertices.ToArray();
+    }
+
+    private void AddVerticalGreedySide(List<float> v, float x, float y, float z, int h, int side)
+    {
+        const float r = 0.45f; const float g = 0.45f; const float b = 0.45f;
+        float yMin = y - 0.5f;
+        float yMax = y + h - 0.5f;
+        float xOff = x, zOff = z;
+
+        // Adjust coordinates based on which side we are drawing
+        if (side == 0) // Left (-X)
+            AddFace(v, xOff - 0.5f, yMax, zOff + 0.5f, xOff - 0.5f, yMax, zOff - 0.5f, xOff - 0.5f, yMin, zOff - 0.5f, xOff - 0.5f, yMin, zOff + 0.5f, r, g, b);
+        else if (side == 1) // Right (+X)
+            AddFace(v, xOff + 0.5f, yMax, zOff - 0.5f, xOff + 0.5f, yMax, zOff + 0.5f, xOff + 0.5f, yMin, zOff + 0.5f, xOff + 0.5f, yMin, zOff - 0.5f, r, g, b);
+        else if (side == 2) // Front (+Z)
+            AddFace(v, xOff - 0.5f, yMax, zOff + 0.5f, xOff + 0.5f, yMax, zOff + 0.5f, xOff + 0.5f, yMin, zOff + 0.5f, xOff - 0.5f, yMin, zOff + 0.5f, r, g, b);
+        else if (side == 3) // Back (-Z)
+            AddFace(v, xOff + 0.5f, yMax, zOff - 0.5f, xOff - 0.5f, yMax, zOff - 0.5f, xOff - 0.5f, yMin, zOff - 0.5f, xOff + 0.5f, yMin, zOff - 0.5f, r, g, b);
     }
 
     // Helper to find the top block at a coordinate

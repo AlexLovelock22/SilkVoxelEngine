@@ -52,8 +52,8 @@ class Program
         options.Size = new Vector2D<int>(1920, 1080);
         options.Title = "Voxel Engine - Multi-Chunk View";
 
-        options.VSync = false;
-
+        options.VSync = true;
+        
         window = Window.Create(options);
         window.Load += OnLoad;
         window.Update += OnUpdate;
