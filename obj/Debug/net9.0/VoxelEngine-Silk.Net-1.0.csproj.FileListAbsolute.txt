@@ -34,3 +34,4 @@ C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEngine-Silk.Net-1.
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\ref\VoxelEngine-Silk.Net-1.0.dll
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\shader.frag
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\shader.vert
+C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEngine-Silk.Net-1.0.sourcelink.json

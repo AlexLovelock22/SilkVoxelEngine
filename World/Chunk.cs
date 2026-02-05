@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using VoxelEngine_Silk.Net_1._0.World;
 
 namespace VoxelEngine_Silk.Net_1._0.World;
 
@@ -7,14 +9,36 @@ public class Chunk
     public const int Size = 16;
     public byte[,,] Blocks = new byte[Size, Size, Size];
 
-    public Chunk()
+    // 1. Store the chunk's grid coordinates
+    public int ChunkX { get; private set; }
+    public int ChunkZ { get; private set; }
+    private VoxelWorld _world;
+
+
+    // 2. Accept coordinates in the constructor
+    public Chunk(int chunkX, int chunkZ, VoxelWorld world)
     {
-        // Simple terrain generation: 
-        // Fill the bottom half (y < 8) with blocks
+        ChunkX = chunkX;
+        ChunkZ = chunkZ;
+        _world = world;
+        GenerateTerrain();
+    }
+
+    private void GenerateTerrain()
+    {
+        // Simple terrain generation for now
+        // We will replace this with Perlin Noise math in the next step
         for (int x = 0; x < Size; x++)
+        {
             for (int z = 0; z < Size; z++)
+            {
+                // We use the Chunk coordinates to offset the Y-level or Noise
                 for (int y = 0; y < Size / 2; y++)
+                {
                     Blocks[x, y, z] = 1;
+                }
+            }
+        }
     }
 
     public float[] GetVertexData()
@@ -29,7 +53,6 @@ public class Chunk
                 {
                     if (Blocks[x, y, z] == 0) continue;
 
-                    // Check each of the 6 directions
                     bool up = IsAir(x, y + 1, z);
                     bool down = IsAir(x, y - 1, z);
                     bool left = IsAir(x - 1, y, z);
@@ -37,7 +60,6 @@ public class Chunk
                     bool front = IsAir(x, y, z + 1);
                     bool back = IsAir(x, y, z - 1);
 
-                    // Only add the cube if at least one face is visible
                     AddCube(vertices, x, y, z, up, down, left, right, front, back);
                 }
             }
@@ -45,76 +67,82 @@ public class Chunk
         return vertices.ToArray();
     }
 
-    // Helper to check if a neighbor is Air or outside the chunk
     private bool IsAir(int x, int y, int z)
     {
-        if (x < 0 || x >= Size || y < 0 || y >= Size || z < 0 || z >= Size)
-            return true; // Treat boundaries as Air so we see the outside faces
+        // Convert local chunk coordinates to world coordinates
+        int worldX = x + (ChunkX * Size);
+        int worldY = y;
+        int worldZ = z + (ChunkZ * Size);
 
-        return Blocks[x, y, z] == 0;
+        // Ask the world manager for the block at those global coordinates
+        return _world.GetBlock(worldX, worldY, worldZ) == 0;
     }
 
     private void AddCube(List<float> v, float x, float y, float z,
-                     bool up, bool down, bool left, bool right, bool front, bool back)
+                         bool up, bool down, bool left, bool right, bool front, bool back)
     {
-        // Seeded random so the colors don't flicker when the mesh regenerates
-        Random rand = new Random((int)(x + y * Size + z * Size * Size));
+        // 3. We use the World Position (local + chunk offset) for the Random Seed
+        // This ensures colors stay the same even if the chunk is re-meshed
+        int worldX = (int)x + (ChunkX * Size);
+        int worldZ = (int)z + (ChunkZ * Size);
+
+        Random rand = new Random((int)(worldX + y * 1000 + worldZ * 10000));
         float r = (float)rand.NextDouble();
         float g = (float)rand.NextDouble();
         float b = (float)rand.NextDouble();
 
-        // UP FACE (Top)
+        // UP FACE
         if (up)
         {
             v.AddRange(new float[] {
-            x-0.5f, y+0.5f, z-0.5f, r, g, b,  x+0.5f, y+0.5f, z-0.5f, r, g, b,  x+0.5f, y+0.5f, z+0.5f, r, g, b,
-            x+0.5f, y+0.5f, z+0.5f, r, g, b,  x-0.5f, y+0.5f, z+0.5f, r, g, b,  x-0.5f, y+0.5f, z-0.5f, r, g, b
-        });
+                x-0.5f, y+0.5f, z-0.5f, r, g, b,  x+0.5f, y+0.5f, z-0.5f, r, g, b,  x+0.5f, y+0.5f, z+0.5f, r, g, b,
+                x+0.5f, y+0.5f, z+0.5f, r, g, b,  x-0.5f, y+0.5f, z+0.5f, r, g, b,  x-0.5f, y+0.5f, z-0.5f, r, g, b
+            });
         }
 
-        // DOWN FACE (Bottom)
+        // DOWN FACE
         if (down)
         {
             v.AddRange(new float[] {
-            x-0.5f, y-0.5f, z-0.5f, r, g, b,  x+0.5f, y-0.5f, z-0.5f, r, g, b,  x+0.5f, y-0.5f, z+0.5f, r, g, b,
-            x+0.5f, y-0.5f, z+0.5f, r, g, b,  x-0.5f, y-0.5f, z+0.5f, r, g, b,  x-0.5f, y-0.5f, z-0.5f, r, g, b
-        });
+                x-0.5f, y-0.5f, z-0.5f, r, g, b,  x+0.5f, y-0.5f, z-0.5f, r, g, b,  x+0.5f, y-0.5f, z+0.5f, r, g, b,
+                x+0.5f, y-0.5f, z+0.5f, r, g, b,  x-0.5f, y-0.5f, z+0.5f, r, g, b,  x-0.5f, y-0.5f, z-0.5f, r, g, b
+            });
         }
 
         // LEFT FACE
         if (left)
         {
             v.AddRange(new float[] {
-            x-0.5f, y+0.5f, z+0.5f, r, g, b,  x-0.5f, y+0.5f, z-0.5f, r, g, b,  x-0.5f, y-0.5f, z-0.5f, r, g, b,
-            x-0.5f, y-0.5f, z-0.5f, r, g, b,  x-0.5f, y-0.5f, z+0.5f, r, g, b,  x-0.5f, y+0.5f, z+0.5f, r, g, b
-        });
+                x-0.5f, y+0.5f, z+0.5f, r, g, b,  x-0.5f, y+0.5f, z-0.5f, r, g, b,  x-0.5f, y-0.5f, z-0.5f, r, g, b,
+                x-0.5f, y-0.5f, z-0.5f, r, g, b,  x-0.5f, y-0.5f, z+0.5f, r, g, b,  x-0.5f, y+0.5f, z+0.5f, r, g, b
+            });
         }
 
         // RIGHT FACE
         if (right)
         {
             v.AddRange(new float[] {
-            x+0.5f, y+0.5f, z+0.5f, r, g, b,  x+0.5f, y+0.5f, z-0.5f, r, g, b,  x+0.5f, y-0.5f, z-0.5f, r, g, b,
-            x+0.5f, y-0.5f, z-0.5f, r, g, b,  x+0.5f, y-0.5f, z+0.5f, r, g, b,  x+0.5f, y+0.5f, z+0.5f, r, g, b
-        });
+                x+0.5f, y+0.5f, z+0.5f, r, g, b,  x+0.5f, y+0.5f, z-0.5f, r, g, b,  x+0.5f, y-0.5f, z-0.5f, r, g, b,
+                x+0.5f, y-0.5f, z-0.5f, r, g, b,  x+0.5f, y-0.5f, z+0.5f, r, g, b,  x+0.5f, y+0.5f, z+0.5f, r, g, b
+            });
         }
 
         // FRONT FACE
         if (front)
         {
             v.AddRange(new float[] {
-            x-0.5f, y-0.5f, z+0.5f, r, g, b,  x+0.5f, y-0.5f, z+0.5f, r, g, b,  x+0.5f, y+0.5f, z+0.5f, r, g, b,
-            x+0.5f, y+0.5f, z+0.5f, r, g, b,  x-0.5f, y+0.5f, z+0.5f, r, g, b,  x-0.5f, y-0.5f, z+0.5f, r, g, b
-        });
+                x-0.5f, y-0.5f, z+0.5f, r, g, b,  x+0.5f, y-0.5f, z+0.5f, r, g, b,  x+0.5f, y+0.5f, z+0.5f, r, g, b,
+                x+0.5f, y+0.5f, z+0.5f, r, g, b,  x-0.5f, y+0.5f, z+0.5f, r, g, b,  x-0.5f, y-0.5f, z+0.5f, r, g, b
+            });
         }
 
         // BACK FACE
         if (back)
         {
             v.AddRange(new float[] {
-            x-0.5f, y-0.5f, z-0.5f, r, g, b,  x+0.5f, y-0.5f, z-0.5f, r, g, b,  x+0.5f, y+0.5f, z-0.5f, r, g, b,
-            x+0.5f, y+0.5f, z-0.5f, r, g, b,  x-0.5f, y+0.5f, z-0.5f, r, g, b,  x-0.5f, y-0.5f, z-0.5f, r, g, b
-        });
+                x-0.5f, y-0.5f, z-0.5f, r, g, b,  x+0.5f, y-0.5f, z-0.5f, r, g, b,  x+0.5f, y+0.5f, z-0.5f, r, g, b,
+                x+0.5f, y+0.5f, z-0.5f, r, g, b,  x-0.5f, y+0.5f, z-0.5f, r, g, b,  x-0.5f, y-0.5f, z-0.5f, r, g, b
+            });
         }
     }
 }
