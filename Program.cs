@@ -52,11 +52,14 @@ class Program
         options.Size = new Vector2D<int>(1920, 1080);
         options.Title = "Voxel Engine - Multi-Chunk View";
 
+        options.VSync = false;
+
         window = Window.Create(options);
         window.Load += OnLoad;
         window.Update += OnUpdate;
         window.Render += OnRender;
         window.Run();
+
     }
     private static unsafe void OnLoad()
     {
@@ -144,25 +147,36 @@ class Program
 
             // 3. LOAD PASS
             // Now we only load what's missing from the visible set
+            // 3. LOAD PASS
             foreach (var coord in visibleCoords)
             {
                 if (!voxelWorld.Chunks.ContainsKey(coord))
                 {
                     var chunk = new Chunk(coord.Item1, coord.Item2, voxelWorld);
+
                     if (voxelWorld.Chunks.TryAdd(coord, chunk))
                     {
-                        QueueChunkForMeshing(chunk);
-
-                        // Neighbors
+                        // Get neighbors once
                         var n = voxelWorld.GetNeighbors(coord.Item1, coord.Item2);
+
+                        // OPTIMIZATION 1: Only mesh the NEW chunk if it has neighbors.
+                        // If neighbors aren't loaded yet, the faces will be wrong anyway.
+                        // When those neighbors eventually load, they will trigger this chunk to mesh.
+                        if (n.r != null && n.l != null && n.f != null && n.b != null)
+                        {
+                            QueueChunkForMeshing(chunk);
+                        }
+
+                        // OPTIMIZATION 2: Only re-mesh neighbors if they AREN'T currently pending.
+                        // This prevents the same neighbor from being meshed 4 times in a row 
+                        // as you move past a group of new chunks.
                         if (n.r != null) QueueChunkForMeshing(n.r);
                         if (n.l != null) QueueChunkForMeshing(n.l);
                         if (n.f != null) QueueChunkForMeshing(n.f);
                         if (n.b != null) QueueChunkForMeshing(n.b);
                     }
 
-                    // Throttle slightly so we don't choke the CPU, 
-                    // but keep it fast enough for high-speed travel
+                    // Keep it at 0 or 1 to prevent thread starvation
                     Thread.Sleep(0);
                 }
             }

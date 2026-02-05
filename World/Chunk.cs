@@ -9,6 +9,11 @@ public class Chunk
     public const int Height = 256; // Added this
     public byte[,,] Blocks = new byte[Size, Height, Size]; // Updated array
 
+
+    // Handling Max Height so we're not wasing resources:
+    private int[,] _heightMap = new int[Size, Size];
+    private int _highestPoint = 0;
+
     public int ChunkX { get; private set; }
     public int ChunkZ { get; private set; }
     private VoxelWorld _world;
@@ -23,44 +28,42 @@ public class Chunk
 
     private void GenerateTerrain(VoxelWorld world)
     {
+        _highestPoint = 0;
+
         for (int x = 0; x < Size; x++)
         {
             for (int z = 0; z < Size; z++)
             {
+                // 1. Convert local chunk coords to global world coords
                 float worldX = (ChunkX * Size) + x;
                 float worldZ = (ChunkZ * Size) + z;
 
+                // 2. Get climate values
                 float temp = (world.TempNoise.GetNoise(worldX, worldZ) + 1f) / 2f;
                 float humidity = (world.HumidityNoise.GetNoise(worldX, worldZ) + 1f) / 2f;
 
+                // 3. Determine Biome and get settings
                 var biomeType = BiomeManager.DetermineBiome(temp, humidity);
                 var settings = BiomeManager.GetSettings(biomeType);
 
+                // 4. Calculate height
                 world.HeightNoise.SetFrequency(settings.Frequency);
                 float noiseHeight = world.HeightNoise.GetNoise(worldX, worldZ);
 
-                // 1. Map to the new vertical scale. 
-                // If BaseHeight is 128, you have 128 blocks of "thickness" below you.
                 int finalHeight = (int)(settings.BaseHeight + (noiseHeight * settings.Variation));
-
-                // 2. Safety Clamp: Ensure we never try to set a block at y=256 or y=-1
                 finalHeight = Math.Clamp(finalHeight, 0, Height - 1);
 
-                // 3. THE OPTIMIZATION: Vertical Loop
-                // Change 'Size' (16) to 'Height' (256). 
-                // This loop is still extremely fast because it's just setting bytes in an array.
-                for (int y = 0; y < Height; y++)
+                // 5. Update HeightMap and HighestPoint tracking (Used for Meshing optimization)
+                _heightMap[x, z] = finalHeight;
+                if (finalHeight > _highestPoint)
+                    _highestPoint = finalHeight;
+
+                // 6. THE PRO OPTIMIZATION: Fill ONLY up to the surface
+                // We skip the 'else' block and the rest of the loop entirely.
+                // Since the array is 0-initialized, everything above this is already Air.
+                for (int y = 0; y <= finalHeight; y++)
                 {
-                    if (y <= finalHeight)
-                    {
-                        Blocks[x, y, z] = 1;
-                    }
-                    else
-                    {
-                        // Optimization: Only set 0 if the array isn't already cleared.
-                        // (C# arrays are initialized to 0, so you could technically skip this 'else')
-                        Blocks[x, y, z] = 0;
-                    }
+                    Blocks[x, y, z] = 1;
                 }
             }
         }
