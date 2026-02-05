@@ -6,7 +6,8 @@ namespace VoxelEngine_Silk.Net_1._0.World;
 public class Chunk
 {
     public const int Size = 16;
-    public byte[,,] Blocks = new byte[Size, Size, Size];
+    public const int Height = 256; // Added this
+    public byte[,,] Blocks = new byte[Size, Height, Size]; // Updated array
 
     public int ChunkX { get; private set; }
     public int ChunkZ { get; private set; }
@@ -26,36 +27,39 @@ public class Chunk
         {
             for (int z = 0; z < Size; z++)
             {
-                // 1. Convert local chunk coords to global world coords
                 float worldX = (ChunkX * Size) + x;
                 float worldZ = (ChunkZ * Size) + z;
 
-                // 2. Get climate values (returns -1 to 1, we normalize to 0 to 1)
                 float temp = (world.TempNoise.GetNoise(worldX, worldZ) + 1f) / 2f;
                 float humidity = (world.HumidityNoise.GetNoise(worldX, worldZ) + 1f) / 2f;
 
-                // 3. Determine Biome and get its specific settings
                 var biomeType = BiomeManager.DetermineBiome(temp, humidity);
                 var settings = BiomeManager.GetSettings(biomeType);
 
-                // 4. Calculate height based on Biome parameters
-                // We set the frequency of the height noise dynamically based on the biome!
                 world.HeightNoise.SetFrequency(settings.Frequency);
-                float noiseHeight = world.HeightNoise.GetNoise(worldX, worldZ); // -1 to 1
+                float noiseHeight = world.HeightNoise.GetNoise(worldX, worldZ);
 
-                // Map the noise to our biome's height and variation
+                // 1. Map to the new vertical scale. 
+                // If BaseHeight is 128, you have 128 blocks of "thickness" below you.
                 int finalHeight = (int)(settings.BaseHeight + (noiseHeight * settings.Variation));
 
-                // 5. Fill the blocks
-                for (int y = 0; y < Size; y++)
+                // 2. Safety Clamp: Ensure we never try to set a block at y=256 or y=-1
+                finalHeight = Math.Clamp(finalHeight, 0, Height - 1);
+
+                // 3. THE OPTIMIZATION: Vertical Loop
+                // Change 'Size' (16) to 'Height' (256). 
+                // This loop is still extremely fast because it's just setting bytes in an array.
+                for (int y = 0; y < Height; y++)
                 {
                     if (y <= finalHeight)
                     {
-                        Blocks[x, y, z] = 1; // For now, just "solid"
+                        Blocks[x, y, z] = 1;
                     }
                     else
                     {
-                        Blocks[x, y, z] = 0; // Air
+                        // Optimization: Only set 0 if the array isn't already cleared.
+                        // (C# arrays are initialized to 0, so you could technically skip this 'else')
+                        Blocks[x, y, z] = 0;
                     }
                 }
             }
@@ -64,22 +68,24 @@ public class Chunk
 
     public float[] GetVertexData(Chunk right, Chunk left, Chunk front, Chunk back)
     {
-        // Pre-size the list. With greedy meshing, we need way less space!
-        List<float> vertices = new List<float>(4096);
+        // Pre-size the list higher since we have more potential vertical faces
+        List<float> vertices = new List<float>(8192);
         bool[,] processedTop = new bool[Size, Size];
 
-        // 1. GREEDY TOP FACES (The most important for FPS)
+        // 1. GREEDY TOP FACES
+        // This logic stays efficient because it only cares about the surface 'y'
         for (int z = 0; z < Size; z++)
         {
             for (int x = 0; x < Size; x++)
             {
-                int y = GetSurfaceHeight(x, z);
-                if (y < 0 || processedTop[x, z]) continue;
+                if (processedTop[x, z]) continue;
 
-                // Only mesh if there is air above it
+                int y = GetSurfaceHeight(x, z);
+                if (y < 0) continue;
+
+                // Only mesh if there is air above it (using Height check inside IsAir)
                 if (!IsAir(x, y + 1, z, right, left, front, back)) continue;
 
-                // Find how far we can extend this face in the X direction
                 int width = 1;
                 while (x + width < Size && !processedTop[x + width, z] &&
                        GetSurfaceHeight(x + width, z) == y &&
@@ -88,7 +94,6 @@ public class Chunk
                     width++;
                 }
 
-                // Find how far we can extend this face in the Z direction
                 int depth = 1;
                 bool canExtendZ = true;
                 while (z + depth < Size && canExtendZ)
@@ -106,27 +111,29 @@ public class Chunk
                     if (canExtendZ) depth++;
                 }
 
-                // Add ONE large quad for the entire area
                 AddGreedyFace(vertices, x, y + 0.5f, z, width, depth, true);
 
-                // Mark all merged blocks as processed
                 for (int dz = 0; dz < depth; dz++)
                     for (int dx = 0; dx < width; dx++)
                         processedTop[x + dx, z + dz] = true;
             }
         }
 
-        // 2. SIDES AND BOTTOM (Standard mesh for now)
-        // We iterate again to catch the sides of the blocks
+        // 2. SIDES AND BOTTOM (Optimized Vertical Loop)
         for (int x = 0; x < Size; x++)
         {
-            for (int y = 0; y < Size; y++)
+            for (int z = 0; z < Size; z++)
             {
-                for (int z = 0; z < Size; z++)
+                // OPTIMIZATION: Instead of looping 0 to 255 every time, 
+                // we only loop up to the surface height of this specific column.
+                int columnTop = GetSurfaceHeight(x, z);
+                if (columnTop < 0) continue;
+
+                for (int y = 0; y <= columnTop; y++)
                 {
                     if (Blocks[x, y, z] == 0) continue;
 
-                    // We skip 'up' because we did it greedily above
+                    // Check neighbors (IsAir now uses Height boundary checks)
                     bool down = IsAir(x, y - 1, z, right, left, front, back);
                     bool leftF = IsAir(x - 1, y, z, right, left, front, back);
                     bool rightF = IsAir(x + 1, y, z, right, left, front, back);
@@ -147,7 +154,8 @@ public class Chunk
     // Helper to find the top block at a coordinate
     private int GetSurfaceHeight(int x, int z)
     {
-        for (int y = Size - 1; y >= 0; y--)
+        // Search from the very top of the 256-height world downwards
+        for (int y = Height - 1; y >= 0; y--)
         {
             if (Blocks[x, y, z] != 0) return y;
         }
@@ -188,11 +196,16 @@ public class Chunk
 
     private bool IsAir(int x, int y, int z, Chunk right, Chunk left, Chunk front, Chunk back)
     {
-        if (y < 0 || y >= Size) return true;
+        // 1. UPDATED: Check against Height (256) instead of Size (16)
+        // This prevents mountains from being culled incorrectly at the old ceiling
+        if (y < 0 || y >= Height) return true;
 
+        // 2. Local check (Internal to this chunk)
         if (x >= 0 && x < Size && z >= 0 && z < Size)
             return Blocks[x, y, z] == 0;
 
+        // 3. Neighbor checks (Horizontal boundaries)
+        // Note: We still use 'Size' here because the chunks are still 16x16 wide.
         if (x >= Size) return right == null || right.Blocks[0, y, z] == 0;
         if (x < 0) return left == null || left.Blocks[Size - 1, y, z] == 0;
         if (z >= Size) return front == null || front.Blocks[x, y, 0] == 0;

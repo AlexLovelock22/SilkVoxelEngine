@@ -12,9 +12,9 @@ public static class BiomeManager
 {
     public static BiomeSettings GetSettings(BiomeType type) => type switch
     {
-        BiomeType.Desert => new BiomeSettings { BaseHeight = 2, Variation = 1, Frequency = 0.01f },
-        BiomeType.Plains => new BiomeSettings { BaseHeight = 5, Variation = 3, Frequency = 0.02f },
-        BiomeType.Forest => new BiomeSettings { BaseHeight = 6, Variation = 6, Frequency = 0.03f },
+        BiomeType.Desert => new BiomeSettings { BaseHeight = 20, Variation = 1, Frequency = 0.01f },
+        BiomeType.Plains => new BiomeSettings { BaseHeight = 50, Variation = 3, Frequency = 0.02f },
+        BiomeType.Forest => new BiomeSettings { BaseHeight = 80, Variation = 6, Frequency = 0.03f },
         BiomeType.Mountains => new BiomeSettings { BaseHeight = 15, Variation = 20, Frequency = 0.05f },
         _ => new BiomeSettings { BaseHeight = 5, Variation = 5, Frequency = 0.02f }
     };
