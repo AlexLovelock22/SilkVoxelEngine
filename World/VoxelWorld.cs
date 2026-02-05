@@ -6,6 +6,35 @@ namespace VoxelEngine_Silk.Net_1._0.World;
 public class VoxelWorld
 {
     public Dictionary<(int, int), Chunk> Chunks = new();
+    // Noise Generators
+    public FastNoiseLite HeightNoise = new();
+    public FastNoiseLite TempNoise = new();
+    public FastNoiseLite HumidityNoise = new();
+    public (Chunk? r, Chunk? l, Chunk? f, Chunk? b) GetNeighbors(int cx, int cz)
+    {
+        Chunks.TryGetValue((cx + 1, cz), out var r);
+        Chunks.TryGetValue((cx - 1, cz), out var l);
+        Chunks.TryGetValue((cx, cz + 1), out var f);
+        Chunks.TryGetValue((cx, cz - 1), out var b);
+        return (r, l, f, b);
+    }
+
+    public VoxelWorld()
+    {
+        // 1. Height Noise (The actual verticality)
+        HeightNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+
+        // 2. Temperature (Low frequency = big blobs of heat/cold)
+        TempNoise.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
+        TempNoise.SetFrequency(0.005f);
+
+        // 3. Humidity (Big blobs of wet/dry)
+        HumidityNoise.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
+        HumidityNoise.SetFrequency(0.005f);
+        HumidityNoise.SetSeed(1337); // Different seed from Temp
+    }
+
+
 
     public byte GetBlock(int x, int y, int z)
     {
