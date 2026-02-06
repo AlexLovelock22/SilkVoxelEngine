@@ -130,93 +130,62 @@ public class Chunk
         return Math.Max(0, 1.0f - (dist * 2.5f)); // 2.5f defines the blend 'softness'
     }
 
-    public float[] GetVertexData(Chunk right, Chunk left, Chunk front, Chunk back)
+    public float[] GetVertexData()
     {
-        // Pre-size the list higher since we have more potential vertical faces
-        List<float> vertices = new List<float>(8192);
-        bool[,] processedTop = new bool[Size, Size];
-
-        // 1. GREEDY TOP FACES
-        // This logic stays efficient because it only cares about the surface 'y'
-        for (int z = 0; z < Size; z++)
-        {
-            for (int x = 0; x < Size; x++)
-            {
-                if (processedTop[x, z]) continue;
-
-                int y = GetSurfaceHeight(x, z);
-                if (y < 0) continue;
-
-                // Only mesh if there is air above it (using Height check inside IsAir)
-                if (!IsAir(x, y + 1, z, right, left, front, back)) continue;
-
-                int width = 1;
-                while (x + width < Size && !processedTop[x + width, z] &&
-                       GetSurfaceHeight(x + width, z) == y &&
-                       IsAir(x + width, y + 1, z, right, left, front, back))
-                {
-                    width++;
-                }
-
-                int depth = 1;
-                bool canExtendZ = true;
-                while (z + depth < Size && canExtendZ)
-                {
-                    for (int wx = 0; wx < width; wx++)
-                    {
-                        if (processedTop[x + wx, z + depth] ||
-                            GetSurfaceHeight(x + wx, z + depth) != y ||
-                            !IsAir(x + wx, y + 1, z + depth, right, left, front, back))
-                        {
-                            canExtendZ = false;
-                            break;
-                        }
-                    }
-                    if (canExtendZ) depth++;
-                }
-
-                AddGreedyFace(vertices, x, y, z, width, depth, true);
-
-                for (int dz = 0; dz < depth; dz++)
-                    for (int dx = 0; dx < width; dx++)
-                        processedTop[x + dx, z + dz] = true;
-            }
-        }
+        List<float> vertices = new List<float>();
+        var neighbors = _world.GetNeighbors(ChunkX, ChunkZ);
 
         for (int x = 0; x < Size; x++)
         {
             for (int z = 0; z < Size; z++)
             {
-                int columnTop = GetSurfaceHeight(x, z);
-                if (columnTop < 0) continue;
+                // OPTIMIZATION: Get the local height once for this column
+                int columnHeight = _heightMap[x, z];
 
-                for (int side = 0; side < 4; side++)
+                // We only need to check up to the highest point in the chunk or sea level
+                int maxY = Math.Max(columnHeight, (int)BiomeManager.SEA_LEVEL);
+
+                for (int y = 0; y <= maxY; y++)
                 {
-                    for (int y = 0; y <= columnTop; y++)
+                    byte blockType = Blocks[x, y, z];
+                    if (blockType == 0) continue; // Skip Air
+
+                    // Only generate faces for blocks that are actually visible
+                    // IsAir checks the 6 immediate neighbors
+                    bool up = IsAir(x, y + 1, z, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
+                    bool down = IsAir(x, y - 1, z, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
+                    bool left = IsAir(x - 1, y, z, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
+                    bool right = IsAir(x + 1, y, z, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
+                    bool front = IsAir(x, y, z + 1, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
+                    bool back = IsAir(x, y, z - 1, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
+
+                    // If no faces are visible, don't waste time on this block
+                    if (!up && !down && !left && !right && !front && !back) continue;
+
+                    // Define colors based on block type (Temporary until texturing)
+                    Vector3 color = blockType == 2 ? new Vector3(0.2f, 0.4f, 0.8f) : new Vector3(0.5f, 0.5f, 0.5f);
+
+                    // 1. TOP FACE (The "Lid")
+                    if (up)
                     {
-                        if (Blocks[x, y, z] == 0) continue;
-
-                        int nx = x, nz = z;
-                        if (side == 0) nx--;
-                        else if (side == 1) nx++;
-                        else if (side == 2) nz++; else if (side == 3) nz--;
-
-                        if (IsAir(nx, y, nz, right, left, front, back))
-                        {
-                            int startY = y;
-                            int height = 1;
-
-                            while (y + 1 <= columnTop &&
-                                   Blocks[x, y + 1, z] != 0 &&
-                                   IsAir(nx, y + 1, nz, right, left, front, back))
-                            {
-                                height++;
-                                y++;
-                            }
-
-                            AddVerticalGreedySide(vertices, x, startY, z, height, side);
-                        }
+                        AddGreedyFace(vertices, x, y, z, 1, 1, true);
                     }
+
+                    // 2. BOTTOM FACE
+                    if (down)
+                    {
+                        // Adding a simple Quad for the bottom
+                        AddQuad(vertices,
+                            new Vector3(x, y, z), new Vector3(x + 1, y, z),
+                            new Vector3(x + 1, y, z + 1), new Vector3(x, y, z + 1),
+                            color * 0.3f); // Darker color for bottom
+                    }
+
+                    // 3. SIDE FACES (The Walls)
+                    if (left) AddVerticalGreedySide(vertices, x, y, z, 1, 0);
+                    if (right) AddVerticalGreedySide(vertices, x, y, z, 1, 1);
+                    if (front) AddVerticalGreedySide(vertices, x, y, z, 1, 2);
+                    if (back) AddVerticalGreedySide(vertices, x, y, z, 1, 3);
                 }
             }
         }

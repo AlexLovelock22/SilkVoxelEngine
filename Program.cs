@@ -156,8 +156,8 @@ class Program
     {
         Task.Run(() =>
         {
-            var n = voxelWorld.GetNeighbors(chunk.ChunkX, chunk.ChunkZ);
-            float[] vertices = chunk.GetVertexData(n.r, n.l, n.f, n.b);
+            // GetVertexData now handles its own neighbors internally
+            float[] vertices = chunk.GetVertexData();
             _uploadQueue.Enqueue((chunk, vertices));
         });
     }
