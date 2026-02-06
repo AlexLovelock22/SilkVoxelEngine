@@ -130,28 +130,23 @@ public class Chunk
         return Math.Max(0, 1.0f - (dist * 2.5f)); // 2.5f defines the blend 'softness'
     }
 
-    public float[] GetVertexData()
+    public int FillVertexData(List<float> buffer)
     {
-        List<float> vertices = new List<float>();
+        buffer.Clear();
         var neighbors = _world.GetNeighbors(ChunkX, ChunkZ);
 
         for (int x = 0; x < Size; x++)
         {
             for (int z = 0; z < Size; z++)
             {
-                // OPTIMIZATION: Get the local height once for this column
                 int columnHeight = _heightMap[x, z];
-
-                // We only need to check up to the highest point in the chunk or sea level
                 int maxY = Math.Max(columnHeight, (int)BiomeManager.SEA_LEVEL);
 
                 for (int y = 0; y <= maxY; y++)
                 {
                     byte blockType = Blocks[x, y, z];
-                    if (blockType == 0) continue; // Skip Air
+                    if (blockType == 0) continue;
 
-                    // Only generate faces for blocks that are actually visible
-                    // IsAir checks the 6 immediate neighbors
                     bool up = IsAir(x, y + 1, z, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
                     bool down = IsAir(x, y - 1, z, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
                     bool left = IsAir(x - 1, y, z, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
@@ -159,75 +154,73 @@ public class Chunk
                     bool front = IsAir(x, y, z + 1, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
                     bool back = IsAir(x, y, z - 1, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
 
-                    // If no faces are visible, don't waste time on this block
                     if (!up && !down && !left && !right && !front && !back) continue;
 
-                    // Define colors based on block type (Temporary until texturing)
-                    Vector3 color = blockType == 2 ? new Vector3(0.2f, 0.4f, 0.8f) : new Vector3(0.5f, 0.5f, 0.5f);
+                    // 1. TOP FACE (Using Greedy helper)
+                    if (up) AddGreedyFace(buffer, x, y, z, 1, 1, true, blockType);
 
-                    // 1. TOP FACE (The "Lid")
-                    if (up)
-                    {
-                        AddGreedyFace(vertices, x, y, z, 1, 1, true);
-                    }
+                    // 2. BOTTOM FACE (Simple Quad for now)
+                    if (down) AddBottomFace(buffer, x, y, z, blockType);
 
-                    // 2. BOTTOM FACE
-                    if (down)
-                    {
-                        // Adding a simple Quad for the bottom
-                        AddQuad(vertices,
-                            new Vector3(x, y, z), new Vector3(x + 1, y, z),
-                            new Vector3(x + 1, y, z + 1), new Vector3(x, y, z + 1),
-                            color * 0.3f); // Darker color for bottom
-                    }
-
-                    // 3. SIDE FACES (The Walls)
-                    if (left) AddVerticalGreedySide(vertices, x, y, z, 1, 0);
-                    if (right) AddVerticalGreedySide(vertices, x, y, z, 1, 1);
-                    if (front) AddVerticalGreedySide(vertices, x, y, z, 1, 2);
-                    if (back) AddVerticalGreedySide(vertices, x, y, z, 1, 3);
+                    // 3. SIDE FACES (Using Vertical Greedy helpers)
+                    if (left) AddVerticalGreedySide(buffer, x, y, z, 1, 0, blockType);
+                    if (right) AddVerticalGreedySide(buffer, x, y, z, 1, 1, blockType);
+                    if (front) AddVerticalGreedySide(buffer, x, y, z, 1, 2, blockType);
+                    if (back) AddVerticalGreedySide(buffer, x, y, z, 1, 3, blockType);
                 }
             }
         }
-        return vertices.ToArray();
+        return buffer.Count;
     }
 
-    private void AddVerticalGreedySide(List<float> v, float x, float y, float z, int h, int side)
+    private void AddGreedyFace(List<float> v, int x, int y, int z, int width, int depth, bool isTop, byte type)
     {
-        Vector3 color = new Vector3(0.45f, 0.45f, 0.45f);
-        float yMin = y;
-        float yMax = y + h;
+        Vector3 color = type == 2 ? new Vector3(0.2f, 0.4f, 0.8f) : new Vector3(0.5f, 0.5f, 0.5f);
+        if (!isTop) color *= 0.3f;
 
-        if (side == 0) // Left (-X)
-            AddQuad(v, new Vector3(x, yMax, z + 1), new Vector3(x, yMax, z), new Vector3(x, yMin, z), new Vector3(x, yMin, z + 1), color, 1, h);
-        else if (side == 1) // Right (+X)
-            AddQuad(v, new Vector3(x + 1, yMax, z), new Vector3(x + 1, yMax, z + 1), new Vector3(x + 1, yMin, z + 1), new Vector3(x + 1, yMin, z), color, 1, h);
-        else if (side == 2) // Front (+Z)
-            AddQuad(v, new Vector3(x, yMax, z + 1), new Vector3(x + 1, yMax, z + 1), new Vector3(x + 1, yMin, z + 1), new Vector3(x, yMin, z + 1), color, 1, h);
-        else if (side == 3) // Back (-Z)
-            AddQuad(v, new Vector3(x + 1, yMax, z), new Vector3(x, yMax, z), new Vector3(x, yMin, z), new Vector3(x + 1, yMin, z), color, 1, h);
+        float yPos = isTop ? y + 1 : y;
+
+        // Define the 4 corners of the greedy quad
+        Vector3 p1 = new Vector3(x, yPos, z);
+        Vector3 p2 = new Vector3(x + width, yPos, z);
+        Vector3 p3 = new Vector3(x + width, yPos, z + depth);
+        Vector3 p4 = new Vector3(x, yPos, z + depth);
+
+        AddQuad(v, p1, p2, p3, p4, color);
     }
 
-    private void AddGreedyFace(List<float> v, float x, float y, float z, int w, int d, bool up)
+    private void AddVerticalGreedySide(List<float> v, int x, int y, int z, int height, int side, byte type)
     {
-        Vector3 color = new Vector3(0.5f, 0.5f, 0.5f);
-        float yTop = y + 1.0f; // Surface sits at the top of the block index
+        Vector3 color = type == 2 ? new Vector3(0.2f, 0.35f, 0.7f) : new Vector3(0.4f, 0.4f, 0.4f);
 
-        Vector3 v1 = new Vector3(x, yTop, z);
-        Vector3 v2 = new Vector3(x + w, yTop, z);
-        Vector3 v3 = new Vector3(x + w, yTop, z + d);
-        Vector3 v4 = new Vector3(x, yTop, z + d);
+        Vector3 p1, p2, p3, p4;
 
-        AddQuad(v, v1, v2, v3, v4, color, w, d);
-    }
-
-    private int GetSurfaceHeight(int x, int z)
-    {
-        for (int y = Height - 1; y >= 0; y--)
+        switch (side)
         {
-            if (Blocks[x, y, z] != 0) return y;
+            case 0: // Left (-X)
+                p1 = new Vector3(x, y, z); p2 = new Vector3(x, y, z + 1);
+                p3 = new Vector3(x, y + height, z + 1); p4 = new Vector3(x, y + height, z);
+                break;
+            case 1: // Right (+X)
+                p1 = new Vector3(x + 1, y, z + 1); p2 = new Vector3(x + 1, y, z);
+                p3 = new Vector3(x + 1, y + height, z); p4 = new Vector3(x + 1, y + height, z + 1);
+                break;
+            case 2: // Front (+Z)
+                p1 = new Vector3(x, y, z + 1); p2 = new Vector3(x + 1, y, z + 1);
+                p3 = new Vector3(x + 1, y + height, z + 1); p4 = new Vector3(x, y + height, z + 1);
+                break;
+            default: // Back (-Z)
+                p1 = new Vector3(x + 1, y, z); p2 = new Vector3(x, y, z);
+                p3 = new Vector3(x, y + height, z); p4 = new Vector3(x + 1, y + height, z);
+                break;
         }
-        return -1;
+        AddQuad(v, p1, p2, p3, p4, color);
+    }
+
+    private void AddBottomFace(List<float> v, int x, int y, int z, byte type)
+    {
+        Vector3 color = (type == 2 ? new Vector3(0.2f, 0.4f, 0.8f) : new Vector3(0.5f, 0.5f, 0.5f)) * 0.3f;
+        AddQuad(v, new Vector3(x, y, z + 1), new Vector3(x + 1, y, z + 1), new Vector3(x + 1, y, z), new Vector3(x, y, z), color);
     }
 
     private bool IsAir(int x, int y, int z, Chunk right, Chunk left, Chunk front, Chunk back)

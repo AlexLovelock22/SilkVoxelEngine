@@ -152,13 +152,29 @@ class Program
         }
     }
 
+    // Add this near your other static variables in Program.cs
+    private static ConcurrentBag<List<float>> _meshBuffers = new();
+
+    private static List<float> GetBufferFromPool()
+    {
+        if (_meshBuffers.TryTake(out var list)) return list;
+        return new List<float>(16 * 16 * 128); // Pre-size to avoid internal resizing
+    }
+
+
     private static void QueueChunkForMeshing(Chunk chunk)
     {
         Task.Run(() =>
         {
-            // GetVertexData now handles its own neighbors internally
-            float[] vertices = chunk.GetVertexData();
+            List<float> buffer = GetBufferFromPool();
+
+            chunk.FillVertexData(buffer);
+
+            float[] vertices = buffer.ToArray();
             _uploadQueue.Enqueue((chunk, vertices));
+
+            buffer.Clear();
+            _meshBuffers.Add(buffer);
         });
     }
 
