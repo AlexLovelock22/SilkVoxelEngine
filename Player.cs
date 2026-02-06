@@ -67,14 +67,13 @@ public class Player
         long currentTime = Stopwatch.GetTimestamp() / (Stopwatch.Frequency / 1000);
 
         // 1. Double-Tap Space to Toggle Fly
-        // We check this at the very start so it works regardless of being in water/air
         if (keyboard.IsKeyPressed(Key.Space))
         {
             if (currentTime - _lastSpaceTime < 250 && currentTime - _lastSpaceTime > 50)
             {
                 IsFlying = !IsFlying;
-                Velocity.Y = 0; // Reset momentum on toggle
-                _lastSpaceTime = 0; // Prevent triple-tap triggers
+                Velocity.Y = 0;
+                _lastSpaceTime = 0;
             }
             else
             {
@@ -88,76 +87,123 @@ public class Player
                        world.GetBlock((int)Math.Floor(eyePos.X), (int)Math.Floor(eyePos.Y), (int)Math.Floor(eyePos.Z)) == 2;
 
         UpdateCameraVectors();
-        Vector3 inputDir = GetInputDirection(keyboard);
 
-        // 3. Apply Movement Physics
+        // This now returns a vector already pointing where the camera looks
+        Vector3 moveDir = GetInputDirection(keyboard);
+        float currentSpeed = IsFlying ? 20.0f : WALK_SPEED;
+        float swimSpeed = WALK_SPEED * 0.7f;
+
+        // 3. Apply Vertical Physics
         if (IsFlying)
         {
-            // FLYING PHYSICS
-            float flySpeed = WALK_SPEED * 3.0f;
-            Velocity.X = inputDir.X * flySpeed;
-            Velocity.Z = inputDir.Z * flySpeed;
-
-            if (keyboard.IsKeyPressed(Key.Space)) Velocity.Y = flySpeed;
-            else if (keyboard.IsKeyPressed(Key.ShiftLeft)) Velocity.Y = -flySpeed;
-            else Velocity.Y = 0;
+            Velocity.Y = 0;
+            if (keyboard.IsKeyPressed(Key.Space)) Position.Y += currentSpeed * dt;
+            if (keyboard.IsKeyPressed(Key.ShiftLeft)) Position.Y -= currentSpeed * dt;
+            IsGrounded = false;
         }
         else if (inWater)
         {
-            // SWIMMING PHYSICS
             IsGrounded = false;
-            float swimSpeed = WALK_SPEED * 0.7f;
+            Velocity.Y -= Velocity.Y * 3.0f * dt; // Drag
+            Velocity.Y -= 4.0f * dt;             // Sinking
 
-            // Move in camera direction (allows swimming up/down by looking)
-            Vector3 moveDir = CameraFront * inputDir.Z + Vector3.Cross(CameraFront, CameraUp) * inputDir.X;
-
-            if (inputDir.Length() > 0)
+            if (keyboard.IsKeyPressed(Key.Space)) Velocity.Y += (swimSpeed * 8.0f) * dt;
+            if (keyboard.IsKeyPressed(Key.ShiftLeft)) Velocity.Y -= (swimSpeed * 5.0f) * dt;
+        }
+        else
+        {
+            // OLD VERTICAL LOGIC
+            if (IsGrounded)
             {
-                Velocity = moveDir * swimSpeed;
+                Velocity.Y = 0;
+                if (keyboard.IsKeyPressed(Key.Space))
+                {
+                    Velocity.Y = JUMP_FORCE;
+                    IsGrounded = false;
+                }
             }
             else
             {
-                Velocity.X = 0;
-                Velocity.Z = 0;
-                Velocity.Y -= GRAVITY * 0.05f * dt; // Slow sink
+                Velocity.Y += GRAVITY * dt;
             }
-
-            if (keyboard.IsKeyPressed(Key.Space)) Velocity.Y = swimSpeed * 0.8f;
-            if (keyboard.IsKeyPressed(Key.ShiftLeft)) Velocity.Y = -swimSpeed * 0.8f;
         }
-        else
+
+        // 4. Update Horizontal Velocity
+        if (inWater && !IsFlying)
         {
-            // WALKING PHYSICS
-            Velocity.X = inputDir.X * WALK_SPEED;
-            Velocity.Z = inputDir.Z * WALK_SPEED;
+            Velocity.X -= Velocity.X * 3.0f * dt;
+            Velocity.Z -= Velocity.Z * 3.0f * dt;
 
-            if (!IsGrounded) Velocity.Y += GRAVITY * dt;
-
-            if (keyboard.IsKeyPressed(Key.Space) && IsGrounded)
+            if (moveDir.Length() > 0)
             {
-                Velocity.Y = JUMP_FORCE;
-                IsGrounded = false;
+                // For swimming, we use the raw CameraFront to allow vertical swimming
+                Vector3 swimForward = CameraFront;
+                Vector3 swimRight = Vector3.Normalize(Vector3.Cross(swimForward, Vector3.UnitY));
+
+                // Re-calculate moveDir specifically for water to include Y
+                Vector3 waterMove = Vector3.Zero;
+                if (keyboard.IsKeyPressed(Key.W)) waterMove += swimForward;
+                if (keyboard.IsKeyPressed(Key.S)) waterMove -= swimForward;
+                if (keyboard.IsKeyPressed(Key.A)) waterMove -= swimRight;
+                if (keyboard.IsKeyPressed(Key.D)) waterMove += swimRight;
+
+                if (waterMove != Vector3.Zero)
+                {
+                    Vector3 accel = Vector3.Normalize(waterMove) * swimSpeed * 5.0f;
+                    Velocity.X += accel.X * dt;
+                    Velocity.Z += accel.Z * dt;
+                    Velocity.Y += accel.Y * dt;
+                }
             }
         }
-
-        // 4. Collision Resolution (X, Y, Z)
-        Vector3 nextPos = Position + Velocity * dt;
-
-        if (!CheckCollision(new Vector3(nextPos.X, Position.Y, Position.Z), world))
-            Position.X = nextPos.X;
-        else Velocity.X = 0;
-
-        if (!CheckCollision(new Vector3(Position.X, nextPos.Y, Position.Z), world))
-            Position.Y = nextPos.Y;
         else
         {
-            if (Velocity.Y < 0) IsGrounded = true;
-            Velocity.Y = 0;
+            // WALKING/FLYING: moveDir from GetInputDirection is already Camera-Relative
+            Velocity.X = moveDir.X * currentSpeed;
+            Velocity.Z = moveDir.Z * currentSpeed;
         }
 
-        if (!CheckCollision(new Vector3(Position.X, Position.Y, nextPos.Z), world))
-            Position.Z = nextPos.Z;
-        else Velocity.Z = 0;
+        // 5. OLD PER-AXIS COLLISION RESOLUTION
+        // X Axis
+        float moveX = Velocity.X * dt;
+        if (moveX != 0)
+        {
+            Vector3 nextX = Position + new Vector3(moveX, 0, 0);
+            if (!CheckCollision(nextX, world))
+                Position.X = nextX.X;
+        }
+
+        // Z Axis
+        float moveZ = Velocity.Z * dt;
+        if (moveZ != 0)
+        {
+            Vector3 nextZ = Position + new Vector3(0, 0, moveZ);
+            if (!CheckCollision(nextZ, world))
+                Position.Z = nextZ.Z;
+        }
+
+        // Y Axis (Only if not flying)
+        if (!IsFlying)
+        {
+            float moveY = Velocity.Y * dt;
+            Vector3 nextY = Position + new Vector3(0, moveY, 0);
+
+            if (CheckCollision(nextY, world))
+            {
+                if (Velocity.Y < 0) // Falling
+                {
+                    Position.Y = MathF.Floor(nextY.Y + 0.05f) + 1.0f;
+                    IsGrounded = true;
+                }
+                Velocity.Y = 0;
+            }
+            else
+            {
+                Position.Y = nextY.Y;
+                // Grounding check for walking off blocks
+                IsGrounded = CheckCollision(Position + new Vector3(0, -0.01f, 0), world);
+            }
+        }
     }
 
     private bool CheckCollision(Vector3 pos, VoxelWorld world)
