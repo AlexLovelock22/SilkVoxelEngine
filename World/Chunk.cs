@@ -8,7 +8,7 @@ public class Chunk
     public const int Size = 16;
     public const int Height = 256; // Added this
     public byte[,,] Blocks = new byte[Size, Height, Size]; // Updated array
-
+    public bool IsDirty { get; set; } = true;
 
     // Handling Max Height so we're not wasing resources:
     private int[,] _heightMap = new int[Size, Size];
@@ -30,36 +30,6 @@ public class Chunk
     {
         _highestPoint = 0;
 
-        // 1. DATA MAP: 16-block resolution for massive, non-spotty biomes
-        const int sampleRes = 16;
-        const int mapSize = (Size / sampleRes) + 1;
-        var heightSampleMap = new float[mapSize, mapSize];
-
-        // Pre-calculate the heights at the 16x16 grid corners
-        for (int mx = 0; mx < mapSize; mx++)
-        {
-            for (int mz = 0; mz < mapSize; mz++)
-            {
-                // SCALE FIX: We multiply by a 'ClimateScale' factor (e.g., 0.5f) 
-                // to make biomes even larger and less spotty.
-                float worldX = (ChunkX * Size) + (mx * sampleRes);
-                float worldZ = (ChunkZ * Size) + (mz * sampleRes);
-
-                // Sample climate with a very low frequency for 'Continent' feel
-                float temp = (world.TempNoise.GetNoise(worldX * 0.5f, worldZ * 0.5f) + 1f) / 2f;
-                float humidity = (world.HumidityNoise.GetNoise(worldX * 0.5f, worldZ * 0.5f) + 1f) / 2f;
-
-                var biome = BiomeManager.DetermineBiome(temp, humidity);
-                var settings = BiomeManager.GetSettings(biome);
-
-                world.HeightNoise.SetFrequency(settings.Frequency);
-                float noise = world.HeightNoise.GetNoise(worldX, worldZ);
-
-                heightSampleMap[mx, mz] = settings.BaseHeight + (noise * settings.Variation);
-            }
-        }
-
-        // 2. GENERATION LOOP
         for (int x = 0; x < Size; x++)
         {
             for (int z = 0; z < Size; z++)
@@ -67,58 +37,83 @@ public class Chunk
                 float worldX = (ChunkX * Size) + x;
                 float worldZ = (ChunkZ * Size) + z;
 
-                float fx = (float)x / sampleRes;
-                float fz = (float)z / sampleRes;
-                int x0 = (int)Math.Floor(fx);
-                int z0 = (int)Math.Floor(fz);
-                int x1 = Math.Min(x0 + 1, mapSize - 1);
-                int z1 = Math.Min(z0 + 1, mapSize - 1);
+                // 1. MACRO HEIGHT (Continental Layer)
+                // We use a much lower scale (0.05f or even lower) so it changes slowly.
+                // This ensures the world isn't just a flat plane at SEA_LEVEL.
+                // Inside Chunk.cs GenerateTerrain
+                float macroNoise = world.HeightNoise.GetNoise(worldX * 0.005f, worldZ * 0.005f);
+                float continentalOffset = macroNoise * 40f;
 
-                float tx = fx - x0;
-                float tz = fz - z0;
+                // 2. CLIMATE DATA
+                float temp = (world.TempNoise.GetNoise(worldX * 0.5f, worldZ * 0.5f) + 1f) / 2f;
+                float humidity = (world.HumidityNoise.GetNoise(worldX * 0.5f, worldZ * 0.5f) + 1f) / 2f;
 
-                // QUINTIC S-CURVE (The Rolling Hill Secret)
-                // 6t^5 - 15t^4 + 10t^3 ensures zero-acceleration at the borders.
-                float sx = tx * tx * tx * (tx * (tx * 6 - 15) + 10);
-                float sz = tz * tz * tz * (tz * (tz * 6 - 15) + 10);
+                // 3. WEIGHTED BIOME BLENDING
+                // This calculates the "local" biome height (bumps, mountains, etc.)
+                float biomeHeight = GetWeightedHeight(world, worldX, worldZ, temp, humidity);
 
-                // Bilinear Interpolation of pre-calculated heights
-                float blendedHeight = Lerp2D(
-                    heightSampleMap[x0, z0], heightSampleMap[x1, z0],
-                    heightSampleMap[x0, z1], heightSampleMap[x1, z1],
-                    sx, sz
-                );
+                // 4. FINAL COMPOSITE HEIGHT
+                // Combine the local biome features with the global continental rise/fall
+                float finalHeightFloat = biomeHeight + continentalOffset;
 
-                // 3. THE FINAL POLISH: Fractal Layering
-                // Adding a second, much smaller noise octave breaks up the "perfect" math
-                // and makes the hills look like real earth, not plastic.
-                float detail = world.HeightNoise.GetNoise(worldX * 5.0f, worldZ * 5.0f) * 0.3f;
-
-                int finalHeight = (int)MathF.Round(blendedHeight + detail);
+                int finalHeight = (int)MathF.Round(finalHeightFloat);
                 finalHeight = Math.Clamp(finalHeight, 0, Height - 1);
 
+                // 5. DATA STORAGE
                 _heightMap[x, z] = finalHeight;
                 if (finalHeight > _highestPoint) _highestPoint = finalHeight;
 
-                for (int y = 0; y <= finalHeight; y++)
+                for (int y = 0; y < Height; y++)
                 {
-                    Blocks[x, y, z] = 1;
+                    Blocks[x, y, z] = (y <= finalHeight) ? (byte)1 : (byte)0;
                 }
             }
         }
+        this.IsDirty = true;
     }
 
-    // Utility math for smooth transitions
-    private float Lerp(float a, float b, float t) => a + (b - a) * t;
-
-    private float Lerp2D(float c00, float c10, float c01, float c11, float tx, float tz)
+    private float GetWeightedHeight(VoxelWorld world, float wx, float wz, float t, float h)
     {
-        float r1 = Lerp(c00, c10, tx);
-        float r2 = Lerp(c01, c11, tx);
-        return Lerp(r1, r2, tz);
+        // Sample all biomes and blend them based on climate influence
+        BiomeType[] types = (BiomeType[])Enum.GetValues(typeof(BiomeType));
+        float totalWeight = 0;
+        float weightedHeight = 0;
+
+        foreach (var type in types)
+        {
+            float influence = CalculateBiomeInfluence(type, t, h);
+            if (influence <= 0) continue;
+
+            var settings = BiomeManager.GetSettings(type);
+            float weight = influence * influence; // Smoother transitions
+
+            // Sample noise at the biome's specific frequency
+            float noise = world.HeightNoise.GetNoise(wx * (settings.Frequency * 100f), wz * (settings.Frequency * 100f));
+            float hSample = settings.BaseHeight + (noise * settings.Variation);
+
+            weightedHeight += hSample * weight;
+            totalWeight += weight;
+        }
+
+        return (totalWeight > 0) ? (weightedHeight / totalWeight) : 64f;
     }
 
+    private float CalculateBiomeInfluence(BiomeType type, float t, float h)
+    {
+        // Maps climate distance to a 0-1 weight
+        float targetT = 0.5f, targetH = 0.5f;
+        switch (type)
+        {
+            case BiomeType.Desert: targetT = 0.8f; targetH = 0.2f; break;
+            case BiomeType.Forest: targetT = 0.7f; targetH = 0.7f; break;
+            case BiomeType.Mountains: targetT = 0.2f; targetH = 0.5f; break;
+            case BiomeType.Plains: targetT = 0.5f; targetH = 0.4f; break;
+            case BiomeType.Tundra: targetT = 0.1f; targetH = 0.2f; break;
+        }
 
+        float dist = MathF.Sqrt(MathF.Pow(t - targetT, 2) + MathF.Pow(h - targetH, 2));
+        return Math.Max(0, 1.0f - (dist * 2.5f)); // 2.5f defines the blend 'softness'
+    }
     public float[] GetVertexData(Chunk right, Chunk left, Chunk front, Chunk back)
     {
         // Pre-size the list higher since we have more potential vertical faces

@@ -22,19 +22,28 @@ public class VoxelWorld
 
     public VoxelWorld()
     {
-        // 1. Height Noise (The actual verticality)
-        HeightNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+        // 1. HEIGHT NOISE (The physical terrain)
+        HeightNoise.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
+        HeightNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
+        HeightNoise.SetFractalOctaves(5);
+        HeightNoise.SetFractalLacunarity(2.0f);
+        HeightNoise.SetFractalGain(0.6f);
 
-        // 2. Temperature (Low frequency = big blobs of heat/cold)
+        // 2. TEMPERATURE (Climate Size & Variation)
         TempNoise.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
-        TempNoise.SetFrequency(0.005f);
+        TempNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
+        TempNoise.SetFractalOctaves(3); // Adds jaggedness to biome borders
+                                        // This low frequency ensures the main climate zones are large
+        TempNoise.SetFrequency(0.003f);
 
-        // 3. Humidity (Big blobs of wet/dry)
+        // 3. HUMIDITY (Moisture Distribution)
         HumidityNoise.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
+        HumidityNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
+        HumidityNoise.SetFractalOctaves(3);
+        // Setting this slightly higher than Temp prevents biomes from looking like circles
         HumidityNoise.SetFrequency(0.005f);
-        HumidityNoise.SetSeed(1337); // Different seed from Temp
+        HumidityNoise.SetSeed(1337);
     }
-
 
 
     public byte GetBlock(int x, int y, int z)

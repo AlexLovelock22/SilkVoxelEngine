@@ -53,7 +53,7 @@ class Program
         options.Title = "Voxel Engine - Multi-Chunk View";
 
         options.VSync = true;
-        
+
         window = Window.Create(options);
         window.Load += OnLoad;
         window.Update += OnUpdate;
@@ -340,12 +340,10 @@ class Program
     private static void OnUpdate(double deltaTime)
     {
         // 1. GPU UNLOAD LOGIC: Total Drain
-        // Process the entire queue every frame to keep up with high-speed movement
         while (_unloadQueue.TryDequeue(out var coords))
         {
             lock (_renderChunks)
             {
-                // Use exact coordinate matching
                 var existing = _renderChunks.Find(rc =>
                     (int)Math.Floor(rc.WorldPosition.X / 16.0f) == coords.x &&
                     (int)Math.Floor(rc.WorldPosition.Z / 16.0f) == coords.z);
@@ -361,7 +359,7 @@ class Program
         }
 
         // 2. GPU UPLOAD LOGIC: Adaptive Burst
-        int uploadLimit = _uploadQueue.Count > 100 ? 50 : 5; // Higher base limit for faster movement
+        int uploadLimit = _uploadQueue.Count > 100 ? 50 : 5;
         for (int i = 0; i < uploadLimit; i++)
         {
             if (_uploadQueue.TryDequeue(out var data))
@@ -371,20 +369,36 @@ class Program
             else break;
         }
 
-        // 3. Stats & FPS
+        // 3. Stats & Biome Display (Optimized to run once per second)
         _timePassed += deltaTime;
         _frameCount++;
+
         if (_timePassed >= 1.0)
         {
             double fps = _frameCount / _timePassed;
-            window.Title = $"Voxel Engine | Chunks: {_renderChunks.Count} | Verts: {_totalVertexCount:N0} | FPS: {fps:F0} | Pending: {_uploadQueue.Count}";
+
+            // Use CameraPosition to find the current biome
+            float px = CameraPosition.X;
+            float pz = CameraPosition.Z;
+
+            // Sampling climate from the static _world instance
+            float t = (voxelWorld.TempNoise.GetNoise(px * 0.5f, pz * 0.5f) + 1f) / 2f;
+            float h = (voxelWorld.HumidityNoise.GetNoise(px * 0.5f, pz * 0.5f) + 1f) / 2f;
+
+            // Sampling macro/continental height for the altitude display
+            float macro = voxelWorld.HeightNoise.GetNoise(px * 0.1f, pz * 0.1f) * 20f;
+
+            var currentBiome = BiomeManager.DetermineBiome(t, h);
+
+            window.Title = $"Voxel Engine | Biome: {currentBiome} (Alt: {macro:F1}) | Chunks: {_renderChunks.Count} | Verts: {_totalVertexCount:N0} | FPS: {fps:F0} | Pending: {_uploadQueue.Count}";
+
             _timePassed = 0;
             _frameCount = 0;
         }
 
         // 4. Movement Logic
         var keyboard = Input.Keyboards[0];
-        float speed = 60f * (float)deltaTime; // 60 units per second
+        float speed = 100f * (float)deltaTime;
 
         if (keyboard.IsKeyPressed(Key.W)) CameraPosition += speed * CameraFront;
         if (keyboard.IsKeyPressed(Key.S)) CameraPosition -= speed * CameraFront;
