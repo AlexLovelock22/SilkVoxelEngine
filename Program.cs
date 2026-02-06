@@ -33,6 +33,7 @@ class Program
     private static double _timePassed;
     private static int _frameCount;
     private static uint _totalVertexCount;
+    private static Frustum _frustum = new Frustum();
     private static VoxelWorld voxelWorld = new VoxelWorld();
     static void Main(string[] args)
     {
@@ -243,13 +244,15 @@ class Program
         Vector3 eyePos = player.GetEyePosition();
 
         var view = Matrix4x4.CreateLookAt(eyePos, eyePos + player.CameraFront, player.CameraUp);
-
         var projection = Matrix4x4.CreatePerspectiveFieldOfView(
             70.0f * (float)Math.PI / 180.0f,
             (float)window.Size.X / window.Size.Y,
             0.1f,
             2000.0f
         );
+
+        // 1. Update the frustum with the current view-projection matrix
+        _frustum.Update(view * projection);
 
         SetUniformMatrix(Shader, "uView", view);
         SetUniformMatrix(Shader, "uProjection", projection);
@@ -260,19 +263,28 @@ class Program
             chunksToDraw = _renderChunks.ToArray();
         }
 
+        int renderedCount = 0;
         foreach (var rc in chunksToDraw)
         {
-            Vector3 toChunk = Vector3.Normalize(rc.WorldPosition - eyePos);
-            float dot = Vector3.Dot(player.CameraFront, toChunk);
+            // 2. Define the Chunk's Bounding Box (AABB)
+            // Chunk.Size is 16, Chunk.Height is 256
+            Vector3 min = rc.WorldPosition;
+            Vector3 max = rc.WorldPosition + new Vector3(16, 256, 16);
 
-            if (dot < -0.3f) continue;
+            // 3. Perform the Frustum Check
+            if (!_frustum.IsBoxVisible(min, max))
+                continue;
 
             var model = Matrix4x4.CreateTranslation(rc.WorldPosition);
             SetUniformMatrix(Shader, "uModel", model);
 
             Gl.BindVertexArray(rc.VAO);
             Gl.DrawArrays(PrimitiveType.Triangles, 0, rc.VertexCount);
+            renderedCount++;
         }
+
+        // Optional: Log how many chunks were culled in the title bar
+        // window.Title = $"Rendering {renderedCount} / {chunksToDraw.Length} chunks";
     }
 
     private static unsafe void SetUniformMatrix(uint shader, string name, Matrix4x4 matrix)
