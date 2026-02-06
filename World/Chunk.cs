@@ -30,60 +30,76 @@ public class Chunk
     {
         _highestPoint = 0;
 
+        // 1. DATA MAP: 16-block resolution for massive, non-spotty biomes
+        const int sampleRes = 16;
+        const int mapSize = (Size / sampleRes) + 1;
+        var heightSampleMap = new float[mapSize, mapSize];
+
+        // Pre-calculate the heights at the 16x16 grid corners
+        for (int mx = 0; mx < mapSize; mx++)
+        {
+            for (int mz = 0; mz < mapSize; mz++)
+            {
+                // SCALE FIX: We multiply by a 'ClimateScale' factor (e.g., 0.5f) 
+                // to make biomes even larger and less spotty.
+                float worldX = (ChunkX * Size) + (mx * sampleRes);
+                float worldZ = (ChunkZ * Size) + (mz * sampleRes);
+
+                // Sample climate with a very low frequency for 'Continent' feel
+                float temp = (world.TempNoise.GetNoise(worldX * 0.5f, worldZ * 0.5f) + 1f) / 2f;
+                float humidity = (world.HumidityNoise.GetNoise(worldX * 0.5f, worldZ * 0.5f) + 1f) / 2f;
+
+                var biome = BiomeManager.DetermineBiome(temp, humidity);
+                var settings = BiomeManager.GetSettings(biome);
+
+                world.HeightNoise.SetFrequency(settings.Frequency);
+                float noise = world.HeightNoise.GetNoise(worldX, worldZ);
+
+                heightSampleMap[mx, mz] = settings.BaseHeight + (noise * settings.Variation);
+            }
+        }
+
+        // 2. GENERATION LOOP
         for (int x = 0; x < Size; x++)
         {
             for (int z = 0; z < Size; z++)
             {
-                // 1. Convert local chunk coords to global world coords
                 float worldX = (ChunkX * Size) + x;
                 float worldZ = (ChunkZ * Size) + z;
 
-                // --- SMOOTH BIOME BLENDING LOGIC ---
-                float totalHeight = 0;
-                float totalWeight = 0;
+                float fx = (float)x / sampleRes;
+                float fz = (float)z / sampleRes;
+                int x0 = (int)Math.Floor(fx);
+                int z0 = (int)Math.Floor(fz);
+                int x1 = Math.Min(x0 + 1, mapSize - 1);
+                int z1 = Math.Min(z0 + 1, mapSize - 1);
 
-                // Sample a 3x3 area around the current block (offsets of -4, 0, 4)
-                // Sampling slightly further away creates a smoother, more natural slope.
-                for (int ox = -1; ox <= 1; ox++)
-                {
-                    for (int oz = -1; oz <= 1; oz++)
-                    {
-                        float sampleX = worldX + (ox * 4);
-                        float sampleZ = worldZ + (oz * 4);
+                float tx = fx - x0;
+                float tz = fz - z0;
 
-                        // Get climate for the sampled point
-                        float temp = (world.TempNoise.GetNoise(sampleX, sampleZ) + 1f) / 2f;
-                        float humidity = (world.HumidityNoise.GetNoise(sampleX, sampleZ) + 1f) / 2f;
+                // QUINTIC S-CURVE (The Rolling Hill Secret)
+                // 6t^5 - 15t^4 + 10t^3 ensures zero-acceleration at the borders.
+                float sx = tx * tx * tx * (tx * (tx * 6 - 15) + 10);
+                float sz = tz * tz * tz * (tz * (tz * 6 - 15) + 10);
 
-                        // Determine biome at this point
-                        var biomeType = BiomeManager.DetermineBiome(temp, humidity);
-                        var settings = BiomeManager.GetSettings(biomeType);
+                // Bilinear Interpolation of pre-calculated heights
+                float blendedHeight = Lerp2D(
+                    heightSampleMap[x0, z0], heightSampleMap[x1, z0],
+                    heightSampleMap[x0, z1], heightSampleMap[x1, z1],
+                    sx, sz
+                );
 
-                        // Use current worldX/Z for the noise itself to keep the terrain "texture" consistent
-                        world.HeightNoise.SetFrequency(settings.Frequency);
-                        float noiseHeight = world.HeightNoise.GetNoise(worldX, worldZ);
+                // 3. THE FINAL POLISH: Fractal Layering
+                // Adding a second, much smaller noise octave breaks up the "perfect" math
+                // and makes the hills look like real earth, not plastic.
+                float detail = world.HeightNoise.GetNoise(worldX * 5.0f, worldZ * 5.0f) * 0.3f;
 
-                        float h = settings.BaseHeight + (noiseHeight * settings.Variation);
-
-                        // Higher weight for the center sample
-                        float weight = (ox == 0 && oz == 0) ? 1.0f : 0.5f;
-                        totalHeight += h * weight;
-                        totalWeight += weight;
-                    }
-                }
-
-                // Calculate the blended final height
-                int finalHeight = (int)(totalHeight / totalWeight);
+                int finalHeight = (int)MathF.Round(blendedHeight + detail);
                 finalHeight = Math.Clamp(finalHeight, 0, Height - 1);
-                // -----------------------------------
 
-                // 2. Update optimizations (Used for Meshing and faster lookups)
                 _heightMap[x, z] = finalHeight;
-                if (finalHeight > _highestPoint)
-                    _highestPoint = finalHeight;
+                if (finalHeight > _highestPoint) _highestPoint = finalHeight;
 
-                // 3. THE PRO OPTIMIZATION: Fill ONLY up to the surface
-                // The array is already 0-initialized, so everything above finalHeight is Air.
                 for (int y = 0; y <= finalHeight; y++)
                 {
                     Blocks[x, y, z] = 1;
@@ -91,6 +107,17 @@ public class Chunk
             }
         }
     }
+
+    // Utility math for smooth transitions
+    private float Lerp(float a, float b, float t) => a + (b - a) * t;
+
+    private float Lerp2D(float c00, float c10, float c01, float c11, float tx, float tz)
+    {
+        float r1 = Lerp(c00, c10, tx);
+        float r2 = Lerp(c01, c11, tx);
+        return Lerp(r1, r2, tz);
+    }
+
 
     public float[] GetVertexData(Chunk right, Chunk left, Chunk front, Chunk back)
     {
