@@ -131,6 +131,7 @@ public class Chunk
         float dist = MathF.Sqrt(MathF.Pow(t - targetT, 2) + MathF.Pow(h - targetH, 2));
         return Math.Max(0, 1.0f - (dist * 2.5f)); // 2.5f defines the blend 'softness'
     }
+
     public float[] GetVertexData(Chunk right, Chunk left, Chunk front, Chunk back)
     {
         // Pre-size the list higher since we have more potential vertical faces
@@ -176,7 +177,7 @@ public class Chunk
                     if (canExtendZ) depth++;
                 }
 
-                AddGreedyFace(vertices, x, y + 0.5f, z, width, depth, true);
+                AddGreedyFace(vertices, x, y, z, width, depth, true);
 
                 for (int dz = 0; dz < depth; dz++)
                     for (int dx = 0; dx < width; dx++)
@@ -227,9 +228,6 @@ public class Chunk
                         }
                     }
                 }
-
-                // OPTIMIZATION: Removed the 'down' face check entirely. 
-                // This stops rendering the underside of the world.
             }
         }
         return vertices.ToArray();
@@ -238,19 +236,49 @@ public class Chunk
     private void AddVerticalGreedySide(List<float> v, float x, float y, float z, int h, int side)
     {
         const float r = 0.45f; const float g = 0.45f; const float b = 0.45f;
-        float yMin = y - 0.5f;
-        float yMax = y + h - 0.5f;
-        float xOff = x, zOff = z;
 
-        // Adjust coordinates based on which side we are drawing
-        if (side == 0) // Left (-X)
-            AddFace(v, xOff - 0.5f, yMax, zOff + 0.5f, xOff - 0.5f, yMax, zOff - 0.5f, xOff - 0.5f, yMin, zOff - 0.5f, xOff - 0.5f, yMin, zOff + 0.5f, r, g, b);
-        else if (side == 1) // Right (+X)
-            AddFace(v, xOff + 0.5f, yMax, zOff - 0.5f, xOff + 0.5f, yMax, zOff + 0.5f, xOff + 0.5f, yMin, zOff + 0.5f, xOff + 0.5f, yMin, zOff - 0.5f, r, g, b);
-        else if (side == 2) // Front (+Z)
-            AddFace(v, xOff - 0.5f, yMax, zOff + 0.5f, xOff + 0.5f, yMax, zOff + 0.5f, xOff + 0.5f, yMin, zOff + 0.5f, xOff - 0.5f, yMin, zOff + 0.5f, r, g, b);
-        else if (side == 3) // Back (-Z)
-            AddFace(v, xOff + 0.5f, yMax, zOff - 0.5f, xOff - 0.5f, yMax, zOff - 0.5f, xOff - 0.5f, yMin, zOff - 0.5f, xOff + 0.5f, yMin, zOff - 0.5f, r, g, b);
+        // Full integer height: from bottom of first block to top of last block
+        float yMin = y;
+        float yMax = y + h;
+
+        // side 0: Left (-X) at x
+        if (side == 0)
+            AddFace(v, x, yMax, z + 1, x, yMax, z, x, yMin, z, x, yMin, z + 1, r, g, b);
+        // side 1: Right (+X) at x + 1
+        else if (side == 1)
+            AddFace(v, x + 1, yMax, z, x + 1, yMax, z + 1, x + 1, yMin, z + 1, x + 1, yMin, z, r, g, b);
+        // side 2: Front (+Z) at z + 1
+        else if (side == 2)
+            AddFace(v, x, yMax, z + 1, x + 1, yMax, z + 1, x + 1, yMin, z + 1, x, yMin, z + 1, r, g, b);
+        // side 3: Back (-Z) at z
+        else if (side == 3)
+            AddFace(v, x + 1, yMax, z, x, yMax, z, x, yMin, z, x + 1, yMin, z, r, g, b);
+    }
+
+
+
+
+    private void AddGreedyFace(List<float> v, float x, float y, float z, int w, int d, bool up)
+    {
+        const float r = 0.5f; const float g = 0.5f; const float b = 0.5f;
+
+        // Use pure integers for the corners
+        float xMin = x;
+        float xMax = x + w;
+        float zMin = z;
+        float zMax = z + d;
+
+        // THE FIX: If the block is at index Y, the surface is at Y + 1
+        float yTop = y + 1.0f;
+
+        // Triangle 1
+        AddVertex(v, xMin, yTop, zMin, r, g, b);
+        AddVertex(v, xMax, yTop, zMin, r, g, b);
+        AddVertex(v, xMax, yTop, zMax, r, g, b);
+        // Triangle 2
+        AddVertex(v, xMax, yTop, zMax, r, g, b);
+        AddVertex(v, xMin, yTop, zMax, r, g, b);
+        AddVertex(v, xMin, yTop, zMin, r, g, b);
     }
 
     // Helper to find the top block at a coordinate
@@ -262,38 +290,6 @@ public class Chunk
             if (Blocks[x, y, z] != 0) return y;
         }
         return -1;
-    }
-
-    // Helper to add a large rectangular face
-    private void AddGreedyFace(List<float> v, float x, float y, float z, int w, int d, bool up)
-    {
-        const float r = 0.5f; const float g = 0.5f; const float b = 0.5f;
-
-        // Corners of the large rectangle
-        float xMin = x - 0.5f;
-        float xMax = x + w - 0.5f;
-        float zMin = z - 0.5f;
-        float zMax = z + d - 0.5f;
-
-        // Triangle 1
-        AddVertex(v, xMin, y, zMin, r, g, b);
-        AddVertex(v, xMax, y, zMin, r, g, b);
-        AddVertex(v, xMax, y, zMax, r, g, b);
-        // Triangle 2
-        AddVertex(v, xMax, y, zMax, r, g, b);
-        AddVertex(v, xMin, y, zMax, r, g, b);
-        AddVertex(v, xMin, y, zMin, r, g, b);
-    }
-
-    private void AddCubeSides(List<float> v, float x, float y, float z, bool down, bool left, bool right, bool front, bool back)
-    {
-        const float r = 0.45f; const float g = 0.45f; const float b = 0.45f; // Slightly darker sides
-
-        if (down) AddFace(v, x - 0.5f, y - 0.5f, z + 0.5f, x + 0.5f, y - 0.5f, z + 0.5f, x + 0.5f, y - 0.5f, z - 0.5f, x - 0.5f, y - 0.5f, z - 0.5f, r, g, b);
-        if (left) AddFace(v, x - 0.5f, y + 0.5f, z + 0.5f, x - 0.5f, y + 0.5f, z - 0.5f, x - 0.5f, y - 0.5f, z - 0.5f, x - 0.5f, y - 0.5f, z + 0.5f, r, g, b);
-        if (right) AddFace(v, x + 0.5f, y + 0.5f, z - 0.5f, x + 0.5f, y + 0.5f, z + 0.5f, x + 0.5f, y - 0.5f, z + 0.5f, x + 0.5f, y - 0.5f, z - 0.5f, r, g, b);
-        if (front) AddFace(v, x - 0.5f, y + 0.5f, z + 0.5f, x + 0.5f, y + 0.5f, z + 0.5f, x + 0.5f, y - 0.5f, z + 0.5f, x - 0.5f, y - 0.5f, z + 0.5f, r, g, b);
-        if (back) AddFace(v, x + 0.5f, y + 0.5f, z - 0.5f, x - 0.5f, y + 0.5f, z - 0.5f, x - 0.5f, y - 0.5f, z - 0.5f, x + 0.5f, y - 0.5f, z - 0.5f, r, g, b);
     }
 
     private bool IsAir(int x, int y, int z, Chunk right, Chunk left, Chunk front, Chunk back)
@@ -338,19 +334,5 @@ public class Chunk
         AddVertex(v, x3, y3, z3, r, g, b);
         AddVertex(v, x4, y4, z4, r, g, b);
         AddVertex(v, x1, y1, z1, r, g, b);
-    }
-
-    private void AddCube(List<float> v, float x, float y, float z,
-                         bool up, bool down, bool left, bool right, bool front, bool back)
-    {
-        const float r = 0.5f; const float g = 0.5f; const float b = 0.5f;
-
-        // Using 0.5f offsets so cubes are 1x1x1 and centered on their coordinate
-        if (up) AddFace(v, x - 0.5f, y + 0.5f, z - 0.5f, x + 0.5f, y + 0.5f, z - 0.5f, x + 0.5f, y + 0.5f, z + 0.5f, x - 0.5f, y + 0.5f, z + 0.5f, r, g, b);
-        if (down) AddFace(v, x - 0.5f, y - 0.5f, z + 0.5f, x + 0.5f, y - 0.5f, z + 0.5f, x + 0.5f, y - 0.5f, z - 0.5f, x - 0.5f, y - 0.5f, z - 0.5f, r, g, b);
-        if (left) AddFace(v, x - 0.5f, y + 0.5f, z + 0.5f, x - 0.5f, y + 0.5f, z - 0.5f, x - 0.5f, y - 0.5f, z - 0.5f, x - 0.5f, y - 0.5f, z + 0.5f, r, g, b);
-        if (right) AddFace(v, x + 0.5f, y + 0.5f, z - 0.5f, x + 0.5f, y + 0.5f, z + 0.5f, x + 0.5f, y - 0.5f, z + 0.5f, x + 0.5f, y - 0.5f, z - 0.5f, r, g, b);
-        if (front) AddFace(v, x - 0.5f, y + 0.5f, z + 0.5f, x + 0.5f, y + 0.5f, z + 0.5f, x + 0.5f, y - 0.5f, z + 0.5f, x - 0.5f, y - 0.5f, z + 0.5f, r, g, b);
-        if (back) AddFace(v, x + 0.5f, y + 0.5f, z - 0.5f, x - 0.5f, y + 0.5f, z - 0.5f, x - 0.5f, y - 0.5f, z - 0.5f, x + 0.5f, y - 0.5f, z - 0.5f, r, g, b);
     }
 }

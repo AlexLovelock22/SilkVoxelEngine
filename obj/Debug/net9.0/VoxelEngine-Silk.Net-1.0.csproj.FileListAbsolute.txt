@@ -1,3 +1,5 @@
+C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\shader.frag
+C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\shader.vert
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\VoxelEngine-Silk.Net-1.0.exe
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\VoxelEngine-Silk.Net-1.0.deps.json
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\VoxelEngine-Silk.Net-1.0.runtimeconfig.json
@@ -26,12 +28,10 @@ C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEngine-Silk.Net-1.
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEngine-Silk.Net-1.0.AssemblyInfoInputs.cache
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEngine-Silk.Net-1.0.AssemblyInfo.cs
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEngine-Silk.Net-1.0.csproj.CoreCompileInputs.cache
+C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEngine-Silk.Net-1.0.sourcelink.json
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEng.6BDD7DD6.Up2Date
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEngine-Silk.Net-1.0.dll
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\refint\VoxelEngine-Silk.Net-1.0.dll
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEngine-Silk.Net-1.0.pdb
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEngine-Silk.Net-1.0.genruntimeconfig.cache
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\ref\VoxelEngine-Silk.Net-1.0.dll
-C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\shader.frag
-C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\shader.vert
-C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEngine-Silk.Net-1.0.sourcelink.json

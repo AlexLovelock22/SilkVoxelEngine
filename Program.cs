@@ -34,13 +34,10 @@ class Program
     private static List<RenderChunk> _renderChunks = new List<RenderChunk>();
 
     // Camera
-    private static Vector3 CameraPosition = new Vector3(8, 20, 30);
-    private static Vector3 CameraFront = new Vector3(0, 0, -1);
-    private static Vector3 CameraUp = Vector3.UnitY;
-    private static float CameraYaw = -90f;
-    private static float CameraPitch = 0f;
+    private static Player player = new Player(new Vector3(8, 100, 8));
+    private static Vector3 CameraPosition => player.GetEyePosition();
     private static Vector2 LastMousePos;
-
+    private static long _lastSpaceTime = 0;
     // Performance/Debug
     private static double _timePassed;
     private static int _frameCount;
@@ -285,37 +282,49 @@ class Program
         Gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
         Gl.UseProgram(Shader);
 
-        var view = Matrix4x4.CreateLookAt(CameraPosition, CameraPosition + CameraFront, CameraUp);
-        // Use actual window size for aspect ratio
-        var projection = Matrix4x4.CreatePerspectiveFieldOfView(70.0f * (float)Math.PI / 180.0f, (float)window.Size.X / window.Size.Y, 0.1f, 2000.0f);
+        // 1. Get the current eye position directly from the player instance
+        Vector3 eyePos = player.GetEyePosition();
+
+        // 2. Build the View Matrix
+        // This ensures that the 'camera' is exactly at the player's eye level and looking 
+        // in the direction calculated by player.Rotate()
+        var view = Matrix4x4.CreateLookAt(eyePos, eyePos + player.CameraFront, player.CameraUp);
+
+        // 3. Build the Projection Matrix
+        // We keep the near plane at 0.1f, but if clipping persists, we will increase 
+        // the player.Radius to keep the eyePos further from walls.
+        var projection = Matrix4x4.CreatePerspectiveFieldOfView(
+            70.0f * (float)Math.PI / 180.0f,
+            (float)window.Size.X / window.Size.Y,
+            0.1f,
+            2000.0f
+        );
 
         SetUniformMatrix(Shader, "uView", view);
         SetUniformMatrix(Shader, "uProjection", projection);
 
-        _totalVertexCount = 0;
-
-        // We can't use 'lock' easily here without stuttering, 
-        // but the streamer is handling the list safely.
-        var chunksToDraw = _renderChunks.ToArray();
+        // Lock and copy the list to avoid collection modified exceptions during background meshing
+        RenderChunk[] chunksToDraw;
+        lock (_renderChunks)
+        {
+            chunksToDraw = _renderChunks.ToArray();
+        }
 
         foreach (var rc in chunksToDraw)
         {
-            // 1. DIRECTIONAL CULLING ONLY
-            // We removed the Distance check because the streamer loop handles that now.
-            Vector3 toChunk = Vector3.Normalize(rc.WorldPosition - CameraPosition);
-            float dot = Vector3.Dot(CameraFront, toChunk);
+            // 4. Directional Culling
+            // Ensure we use the exact eyePos for the culling calculation to stay in sync
+            Vector3 toChunk = Vector3.Normalize(rc.WorldPosition - eyePos);
+            float dot = Vector3.Dot(player.CameraFront, toChunk);
 
-            // Keep a wide enough FOV so chunks don't pop in at the corners
+            // Cull chunks behind the player (roughly > 90 degrees away from look direction)
             if (dot < -0.3f) continue;
 
-            // 2. DRAWING
             var model = Matrix4x4.CreateTranslation(rc.WorldPosition);
             SetUniformMatrix(Shader, "uModel", model);
 
             Gl.BindVertexArray(rc.VAO);
             Gl.DrawArrays(PrimitiveType.Triangles, 0, rc.VertexCount);
-
-            _totalVertexCount += rc.VertexCount;
         }
     }
 
@@ -339,7 +348,10 @@ class Program
 
     private static void OnUpdate(double deltaTime)
     {
-        // 1. GPU UNLOAD LOGIC: Total Drain
+        var keyboard = Input.Keyboards[0];
+
+        // 1. GPU UNLOAD LOGIC
+        // Remove chunks from video memory that the WorldStreamer marked for deletion
         while (_unloadQueue.TryDequeue(out var coords))
         {
             lock (_renderChunks)
@@ -352,85 +364,65 @@ class Program
                 {
                     Gl.DeleteVertexArray(existing.VAO);
                     Gl.DeleteBuffer(existing.VBO);
-                    _totalVertexCount -= existing.VertexCount;
                     _renderChunks.Remove(existing);
                 }
             }
         }
 
-        // 2. GPU UPLOAD LOGIC: Adaptive Burst
+        // 2. GPU UPLOAD LOGIC
+        // Move newly generated mesh data onto the GPU
         int uploadLimit = _uploadQueue.Count > 100 ? 50 : 5;
         for (int i = 0; i < uploadLimit; i++)
         {
             if (_uploadQueue.TryDequeue(out var data))
-            {
                 FinalizeGPUUpload(data.chunk, data.vertices);
-            }
             else break;
         }
 
-        // 3. Stats & Biome Display (Optimized to run once per second)
+        // 3. PLAYER PHYSICS & MOVEMENT
+        // We removed the manual 'Flight Toggle' block from here because 
+        // it is now handled internally by player.Update().
+        player.Update(deltaTime, keyboard, voxelWorld);
+
+        // 4. STATS & BIOME DISPLAY
         _timePassed += deltaTime;
         _frameCount++;
-
         if (_timePassed >= 1.0)
         {
             double fps = _frameCount / _timePassed;
 
-            // Use CameraPosition to find the current biome
-            float px = CameraPosition.X;
-            float pz = CameraPosition.Z;
+            // Calculate the bounding box for logging
+            float minX = player.Position.X - player.Radius;
+            float maxX = player.Position.X + player.Radius;
+            float minZ = player.Position.Z - player.Radius;
+            float maxZ = player.Position.Z + player.Radius;
 
-            // Sampling climate from the static _world instance
-            float t = (voxelWorld.TempNoise.GetNoise(px * 0.5f, pz * 0.5f) + 1f) / 2f;
-            float h = (voxelWorld.HumidityNoise.GetNoise(px * 0.5f, pz * 0.5f) + 1f) / 2f;
+            // Log to Window Title for real-time tracking
+            window.Title = $"FPS: {fps:F0} | " +
+                           $"Feet: ({player.Position.X:F2}, {player.Position.Y:F2}, {player.Position.Z:F2}) | " +
+                           $"Cam: ({CameraPosition.X:F2}, {CameraPosition.Y:F2}, {CameraPosition.Z:F2}) | " +
+                           $"Box X: [{minX:F2} to {maxX:F2}] Z: [{minZ:F2} to {maxZ:F2}]";
 
-            // Sampling macro/continental height for the altitude display
-            float macro = voxelWorld.HeightNoise.GetNoise(px * 0.1f, pz * 0.1f) * 20f;
-
-            var currentBiome = BiomeManager.DetermineBiome(t, h);
-
-            window.Title = $"Voxel Engine | Biome: {currentBiome} (Alt: {macro:F1}) | Chunks: {_renderChunks.Count} | Verts: {_totalVertexCount:N0} | FPS: {fps:F0} | Pending: {_uploadQueue.Count}";
+            // Also log to console if you need to see history
+            Console.WriteLine($"--- DEBUG FRAME ---");
+            Console.WriteLine($"Player Feet: {player.Position}");
+            Console.WriteLine($"Camera Eye:  {CameraPosition}");
+            Console.WriteLine($"Hitbox Bounds: X:{minX:F2}/{maxX:F2} Z:{minZ:F2}/{maxZ:F2}");
 
             _timePassed = 0;
             _frameCount = 0;
         }
 
-        // 4. Movement Logic
-        var keyboard = Input.Keyboards[0];
-        float speed = 100f * (float)deltaTime;
-
-        if (keyboard.IsKeyPressed(Key.W)) CameraPosition += speed * CameraFront;
-        if (keyboard.IsKeyPressed(Key.S)) CameraPosition -= speed * CameraFront;
-        if (keyboard.IsKeyPressed(Key.A)) CameraPosition -= speed * Vector3.Normalize(Vector3.Cross(CameraFront, CameraUp));
-        if (keyboard.IsKeyPressed(Key.D)) CameraPosition += speed * Vector3.Normalize(Vector3.Cross(CameraFront, CameraUp));
-        if (keyboard.IsKeyPressed(Key.Space)) CameraPosition += speed * CameraUp;
-        if (keyboard.IsKeyPressed(Key.ShiftLeft)) CameraPosition -= speed * CameraUp;
-
+        // 5. GLOBAL INPUT
         if (keyboard.IsKeyPressed(Key.Escape)) window.Close();
     }
 
     private static void OnMouseMove(IMouse mouse, Vector2 position)
     {
-        var lookSensitivity = 0.1f;
-        float xOffset = (position.X - LastMousePos.X) * lookSensitivity;
-        float yOffset = (position.Y - LastMousePos.Y) * lookSensitivity;
+        Vector2 mouseOffset = new Vector2(position.X - LastMousePos.X, position.Y - LastMousePos.Y);
         LastMousePos = position;
 
-        CameraYaw += xOffset;
-        CameraPitch -= yOffset;
-
-        if (CameraPitch > 89.0f) CameraPitch = 89.0f;
-        if (CameraPitch < -89.0f) CameraPitch = -89.0f;
-
-        float yawRad = CameraYaw * (float)Math.PI / 180.0f;
-        float pitchRad = CameraPitch * (float)Math.PI / 180.0f;
-
-        Vector3 direction;
-        direction.X = (float)Math.Cos(yawRad) * (float)Math.Cos(pitchRad);
-        direction.Y = (float)Math.Sin(pitchRad);
-        direction.Z = (float)Math.Sin(yawRad) * (float)Math.Cos(pitchRad);
-
-        CameraFront = Vector3.Normalize(direction);
+        // Tell the player to look around
+        player.Rotate(mouseOffset);
     }
 }
