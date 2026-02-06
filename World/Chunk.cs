@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 
 namespace VoxelEngine_Silk.Net_1._0.World;
 
@@ -29,7 +30,6 @@ public class Chunk
     private void GenerateTerrain(VoxelWorld world)
     {
         _highestPoint = 0;
-        const int SEA_LEVEL = 64; // Match your BiomeManager sea level
 
         for (int x = 0; x < Size; x++)
         {
@@ -42,6 +42,7 @@ public class Chunk
                 float macroNoise = world.HeightNoise.GetNoise(worldX * 0.005f, worldZ * 0.005f);
                 float continentalOffset = macroNoise * 40f;
 
+                // Sampling climate per-block as per your original logic
                 float temp = (world.TempNoise.GetNoise(worldX * 0.5f, worldZ * 0.5f) + 1f) / 2f;
                 float humidity = (world.HumidityNoise.GetNoise(worldX * 0.5f, worldZ * 0.5f) + 1f) / 2f;
 
@@ -49,16 +50,13 @@ public class Chunk
                 float biomeHeight = GetWeightedHeight(world, worldX, worldZ, temp, humidity);
                 float finalHeightFloat = biomeHeight + continentalOffset;
 
-                // 3. RIVER CARVING (New!)
-                // We take the absolute value of Perlin noise to get "ridged" lines
+                // 3. RIVER CARVING
                 float riverSample = MathF.Abs(world.RiverNoise.GetNoise(worldX, worldZ));
-                float riverThreshold = 0.02f; // Smaller = narrower rivers
+                float riverThreshold = 0.02f;
 
                 if (riverSample < riverThreshold)
                 {
-                    // Calculate how deep to carve based on how close we are to the river center
                     float riverCurve = 1.0f - (riverSample / riverThreshold);
-                    // Push the ground down (up to 15 blocks deep)
                     finalHeightFloat -= (riverCurve * 15f);
                 }
 
@@ -68,16 +66,17 @@ public class Chunk
                 _heightMap[x, z] = finalHeight;
                 if (finalHeight > _highestPoint) _highestPoint = finalHeight;
 
-                // 4. BLOCK FILLING (Updated for Water)
+                // 4. BLOCK FILLING
                 for (int y = 0; y < Height; y++)
                 {
                     if (y <= finalHeight)
                     {
-                        Blocks[x, y, z] = 1; // Solid Ground (Stone/Dirt)
+                        Blocks[x, y, z] = 1; // Solid Ground
                     }
-                    else if (y <= SEA_LEVEL)
+                    // Referencing the centralized public constant from BiomeManager
+                    else if (y <= (int)BiomeManager.SEA_LEVEL)
                     {
-                        Blocks[x, y, z] = 2; // WATER BLOCK
+                        Blocks[x, y, z] = 2; // Water
                     }
                     else
                     {
@@ -88,7 +87,6 @@ public class Chunk
         }
         this.IsDirty = true;
     }
-
     private float GetWeightedHeight(VoxelWorld world, float wx, float wz, float t, float h)
     {
         // Sample all biomes and blend them based on climate influence
@@ -227,39 +225,31 @@ public class Chunk
 
     private void AddVerticalGreedySide(List<float> v, float x, float y, float z, int h, int side)
     {
-        const float r = 0.45f; const float g = 0.45f; const float b = 0.45f;
-
+        Vector3 color = new Vector3(0.45f, 0.45f, 0.45f);
         float yMin = y;
         float yMax = y + h;
 
-        if (side == 0)
-            AddFace(v, x, yMax, z + 1, x, yMax, z, x, yMin, z, x, yMin, z + 1, r, g, b);
-        else if (side == 1)
-            AddFace(v, x + 1, yMax, z, x + 1, yMax, z + 1, x + 1, yMin, z + 1, x + 1, yMin, z, r, g, b);
-        else if (side == 2)
-            AddFace(v, x, yMax, z + 1, x + 1, yMax, z + 1, x + 1, yMin, z + 1, x, yMin, z + 1, r, g, b);
-        else if (side == 3)
-            AddFace(v, x + 1, yMax, z, x, yMax, z, x, yMin, z, x + 1, yMin, z, r, g, b);
+        if (side == 0) // Left (-X)
+            AddQuad(v, new Vector3(x, yMax, z + 1), new Vector3(x, yMax, z), new Vector3(x, yMin, z), new Vector3(x, yMin, z + 1), color, 1, h);
+        else if (side == 1) // Right (+X)
+            AddQuad(v, new Vector3(x + 1, yMax, z), new Vector3(x + 1, yMax, z + 1), new Vector3(x + 1, yMin, z + 1), new Vector3(x + 1, yMin, z), color, 1, h);
+        else if (side == 2) // Front (+Z)
+            AddQuad(v, new Vector3(x, yMax, z + 1), new Vector3(x + 1, yMax, z + 1), new Vector3(x + 1, yMin, z + 1), new Vector3(x, yMin, z + 1), color, 1, h);
+        else if (side == 3) // Back (-Z)
+            AddQuad(v, new Vector3(x + 1, yMax, z), new Vector3(x, yMax, z), new Vector3(x, yMin, z), new Vector3(x + 1, yMin, z), color, 1, h);
     }
 
     private void AddGreedyFace(List<float> v, float x, float y, float z, int w, int d, bool up)
     {
-        const float r = 0.5f; const float g = 0.5f; const float b = 0.5f;
+        Vector3 color = new Vector3(0.5f, 0.5f, 0.5f);
+        float yTop = y + 1.0f; // Surface sits at the top of the block index
 
-        float xMin = x;
-        float xMax = x + w;
-        float zMin = z;
-        float zMax = z + d;
+        Vector3 v1 = new Vector3(x, yTop, z);
+        Vector3 v2 = new Vector3(x + w, yTop, z);
+        Vector3 v3 = new Vector3(x + w, yTop, z + d);
+        Vector3 v4 = new Vector3(x, yTop, z + d);
 
-        float yTop = y + 1.0f;
-
-        AddVertex(v, xMin, yTop, zMin, r, g, b);
-        AddVertex(v, xMax, yTop, zMin, r, g, b);
-        AddVertex(v, xMax, yTop, zMax, r, g, b);
-
-        AddVertex(v, xMax, yTop, zMax, r, g, b);
-        AddVertex(v, xMin, yTop, zMax, r, g, b);
-        AddVertex(v, xMin, yTop, zMin, r, g, b);
+        AddQuad(v, v1, v2, v3, v4, color, w, d);
     }
 
     private int GetSurfaceHeight(int x, int z)
@@ -286,26 +276,26 @@ public class Chunk
         return true;
     }
 
-    private void AddVertex(List<float> v, float x, float y, float z, float r, float g, float b)
+    // Inside Chunk.cs
+    private void AddVertex(List<float> v, Vector3 pos, Vector3 color, Vector2 uv)
     {
-        v.Add(x); v.Add(y); v.Add(z);
-        v.Add(r); v.Add(g); v.Add(b);
+        // Position
+        v.Add(pos.X); v.Add(pos.Y); v.Add(pos.Z);
+        // Color
+        v.Add(color.X); v.Add(color.Y); v.Add(color.Z);
+        // UVs (New! This prepares you for texturing)
+        v.Add(uv.X); v.Add(uv.Y);
     }
 
-    private void AddFace(List<float> v,
-        float x1, float y1, float z1,
-        float x2, float y2, float z2,
-        float x3, float y3, float z3,
-        float x4, float y4, float z4,
-        float r, float g, float b)
+    private void AddQuad(List<float> v, Vector3 c1, Vector3 c2, Vector3 c3, Vector3 c4, Vector3 color, int w = 1, int h = 1)
     {
-  
-        AddVertex(v, x1, y1, z1, r, g, b);
-        AddVertex(v, x2, y2, z2, r, g, b);
-        AddVertex(v, x3, y3, z3, r, g, b);
-
-        AddVertex(v, x3, y3, z3, r, g, b);
-        AddVertex(v, x4, y4, z4, r, g, b);
-        AddVertex(v, x1, y1, z1, r, g, b);
+        // Triangle 1
+        AddVertex(v, c1, color, new Vector2(0, 0));
+        AddVertex(v, c2, color, new Vector2(w, 0));
+        AddVertex(v, c3, color, new Vector2(w, h));
+        // Triangle 2
+        AddVertex(v, c3, color, new Vector2(w, h));
+        AddVertex(v, c4, color, new Vector2(0, h));
+        AddVertex(v, c1, color, new Vector2(0, 0));
     }
 }

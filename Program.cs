@@ -181,7 +181,8 @@ class Program
         }
 
         RenderChunk rc = new RenderChunk();
-        rc.VertexCount = (uint)(vertices.Length / 6);
+        // Updated: Vertex now has 8 floats (Pos:3, Color:3, UV:2)
+        rc.VertexCount = (uint)(vertices.Length / 8);
         rc.WorldPosition = new Vector3(chunk.ChunkX * Chunk.Size, 0, chunk.ChunkZ * Chunk.Size);
 
         _totalVertexCount += rc.VertexCount;
@@ -197,12 +198,20 @@ class Program
             Gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(vertices.Length * sizeof(float)), v, BufferUsageARB.StaticDraw);
         }
 
-        uint stride = 6 * sizeof(float);
-        Gl.VertexAttribPointer(0, 3, (GLEnum)VertexAttribType.Float, false, stride, (void*)0);
+        // New Stride: 8 floats * 4 bytes = 32 bytes
+        uint stride = 8 * sizeof(float);
+
+        // Attribute 0: Position (3 floats)
+        Gl.VertexAttribPointer(0, 3, GLEnum.Float, false, stride, (void*)0);
         Gl.EnableVertexAttribArray(0);
 
-        Gl.VertexAttribPointer(1, 3, (GLEnum)VertexAttribType.Float, false, stride, (void*)(3 * sizeof(float)));
+        // Attribute 1: Color (3 floats)
+        Gl.VertexAttribPointer(1, 3, GLEnum.Float, false, stride, (void*)(3 * sizeof(float)));
         Gl.EnableVertexAttribArray(1);
+
+        // Attribute 2: UV Coordinates (2 floats)
+        Gl.VertexAttribPointer(2, 2, GLEnum.Float, false, stride, (void*)(6 * sizeof(float)));
+        Gl.EnableVertexAttribArray(2);
 
         lock (_renderChunks)
         {

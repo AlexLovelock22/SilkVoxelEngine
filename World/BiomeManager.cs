@@ -10,7 +10,7 @@ public struct BiomeSettings
 
 public static class BiomeManager
 {
-    private const float SEA_LEVEL = 64f; 
+    public const float SEA_LEVEL = 64f; 
 
     public static BiomeSettings GetSettings(BiomeType type) => type switch
     {
