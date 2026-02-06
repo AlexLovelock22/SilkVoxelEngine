@@ -134,6 +134,7 @@ public class Chunk
     {
         buffer.Clear();
         var neighbors = _world.GetNeighbors(ChunkX, ChunkZ);
+        var r = neighbors.r; var l = neighbors.l; var f = neighbors.f; var b = neighbors.b;
 
         for (int x = 0; x < Size; x++)
         {
@@ -147,22 +148,26 @@ public class Chunk
                     byte blockType = Blocks[x, y, z];
                     if (blockType == 0) continue;
 
-                    bool up = IsAir(x, y + 1, z, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
-                    bool down = IsAir(x, y - 1, z, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
-                    bool left = IsAir(x - 1, y, z, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
-                    bool right = IsAir(x + 1, y, z, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
-                    bool front = IsAir(x, y, z + 1, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
-                    bool back = IsAir(x, y, z - 1, neighbors.r, neighbors.l, neighbors.f, neighbors.b);
+                    // NEW LOGIC: Use ShouldRenderFace instead of IsAir.
+                    // We pass the current blockType so it can decide: 
+                    // "If I am water and neighbor is water, hide the face."
+                    bool up = ShouldRenderFace(blockType, x, y + 1, z, r, l, f, b);
+                    bool down = ShouldRenderFace(blockType, x, y - 1, z, r, l, f, b);
+                    bool left = ShouldRenderFace(blockType, x - 1, y, z, r, l, f, b);
+                    bool right = ShouldRenderFace(blockType, x + 1, y, z, r, l, f, b);
+                    bool front = ShouldRenderFace(blockType, x, y, z + 1, r, l, f, b);
+                    bool back = ShouldRenderFace(blockType, x, y, z - 1, r, l, f, b);
 
+                    // If all neighbors are solid and same-type, don't waste time drawing
                     if (!up && !down && !left && !right && !front && !back) continue;
 
-                    // 1. TOP FACE (Using Greedy helper)
+                    // 1. TOP FACE
                     if (up) AddGreedyFace(buffer, x, y, z, 1, 1, true, blockType);
 
-                    // 2. BOTTOM FACE (Simple Quad for now)
+                    // 2. BOTTOM FACE
                     if (down) AddBottomFace(buffer, x, y, z, blockType);
 
-                    // 3. SIDE FACES (Using Vertical Greedy helpers)
+                    // 3. SIDE FACES
                     if (left) AddVerticalGreedySide(buffer, x, y, z, 1, 0, blockType);
                     if (right) AddVerticalGreedySide(buffer, x, y, z, 1, 1, blockType);
                     if (front) AddVerticalGreedySide(buffer, x, y, z, 1, 2, blockType);
@@ -173,28 +178,30 @@ public class Chunk
         return buffer.Count;
     }
 
-    private void AddGreedyFace(List<float> v, int x, int y, int z, int width, int depth, bool isTop, byte type)
+    private void AddGreedyFace(List<float> v, int x, int y, int z, int w, int d, bool isTop, byte type)
     {
-        Vector3 color = type == 2 ? new Vector3(0.2f, 0.4f, 0.8f) : new Vector3(0.5f, 0.5f, 0.5f);
-        if (!isTop) color *= 0.3f;
+        var face = isTop ? "top" : "bottom";
+        var data = GetFaceData(type, face, w, d);
 
-        float yPos = isTop ? y + 1 : y;
-
-        // Define the 4 corners of the greedy quad
-        Vector3 p1 = new Vector3(x, yPos, z);
-        Vector3 p2 = new Vector3(x + width, yPos, z);
-        Vector3 p3 = new Vector3(x + width, yPos, z + depth);
-        Vector3 p4 = new Vector3(x, yPos, z + depth);
-
-        AddQuad(v, p1, p2, p3, p4, color);
+        if (isTop)
+        {
+            // Triangle 1
+            AddVertex(v, new Vector3(x, y + 1, z), data.color, new Vector2(data.min.X, data.min.Y));
+            AddVertex(v, new Vector3(x, y + 1, z + d), data.color, new Vector2(data.min.X, data.max.Y));
+            AddVertex(v, new Vector3(x + w, y + 1, z + d), data.color, new Vector2(data.max.X, data.max.Y));
+            // Triangle 2
+            AddVertex(v, new Vector3(x, y + 1, z), data.color, new Vector2(data.min.X, data.min.Y));
+            AddVertex(v, new Vector3(x + w, y + 1, z + d), data.color, new Vector2(data.max.X, data.max.Y));
+            AddVertex(v, new Vector3(x + w, y + 1, z), data.color, new Vector2(data.max.X, data.min.Y));
+        }
     }
 
     private void AddVerticalGreedySide(List<float> v, int x, int y, int z, int height, int side, byte type)
     {
-        Vector3 color = type == 2 ? new Vector3(0.2f, 0.35f, 0.7f) : new Vector3(0.4f, 0.4f, 0.4f);
+        var data = GetFaceData(type, "side", 1, height);
+        Vector3 finalColor = data.color * 0.8f; // Shading for sides
 
         Vector3 p1, p2, p3, p4;
-
         switch (side)
         {
             case 0: // Left (-X)
@@ -214,50 +221,229 @@ public class Chunk
                 p3 = new Vector3(x, y + height, z); p4 = new Vector3(x + 1, y + height, z);
                 break;
         }
-        AddQuad(v, p1, p2, p3, p4, color);
+
+        AddVertex(v, p1, finalColor, new Vector2(data.min.X, data.min.Y));
+        AddVertex(v, p2, finalColor, new Vector2(data.max.X, data.min.Y));
+        AddVertex(v, p3, finalColor, new Vector2(data.max.X, data.max.Y));
+
+        AddVertex(v, p1, finalColor, new Vector2(data.min.X, data.min.Y));
+        AddVertex(v, p3, finalColor, new Vector2(data.max.X, data.max.Y));
+        AddVertex(v, p4, finalColor, new Vector2(data.min.X, data.max.Y));
     }
 
     private void AddBottomFace(List<float> v, int x, int y, int z, byte type)
     {
-        Vector3 color = (type == 2 ? new Vector3(0.2f, 0.4f, 0.8f) : new Vector3(0.5f, 0.5f, 0.5f)) * 0.3f;
-        AddQuad(v, new Vector3(x, y, z + 1), new Vector3(x + 1, y, z + 1), new Vector3(x + 1, y, z), new Vector3(x, y, z), color);
+        var data = GetFaceData(type, "bottom", 1, 1);
+
+        // Triangle 1
+        AddVertex(v, new Vector3(x, y, z), data.color, new Vector2(data.min.X, data.min.Y));
+        AddVertex(v, new Vector3(x + 1, y, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
+        AddVertex(v, new Vector3(x, y, z + 1), data.color, new Vector2(data.min.X, data.max.Y));
+        // Triangle 2
+        AddVertex(v, new Vector3(x, y, z), data.color, new Vector2(data.min.X, data.min.Y));
+        AddVertex(v, new Vector3(x + 1, y, z), data.color, new Vector2(data.max.X, data.min.Y));
+        AddVertex(v, new Vector3(x + 1, y, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
+    }
+
+    private bool ShouldRenderFace(byte currentType, int nx, int ny, int nz, Chunk? r, Chunk? l, Chunk? f, Chunk? b)
+    {
+        if (ny < 0) return false;
+        if (ny >= Height) return currentType != 2; // Sky is effectively air
+
+        byte neighborType = GetBlockId(nx, ny, nz, r, l, f, b);
+
+        // 1. Air is always transparent
+        if (neighborType == 0) return true;
+
+        // 2. If I am Solid and neighbor is Water, I MUST render my side.
+        // This creates the "underwater walls" of the river.
+        if (currentType != 2 && neighborType == 2) return true;
+
+        // 3. If I am Water and neighbor is Water, HIDE the face.
+        // This keeps the water surface perfectly clean.
+        if (currentType == 2 && neighborType == 2) return false;
+
+        // 4. Solid neighbor blocks hide faces.
+        return false;
     }
 
     private bool IsAir(int x, int y, int z, Chunk right, Chunk left, Chunk front, Chunk back)
     {
         if (y < 0 || y >= Height) return true;
 
+        byte blockID;
+
+        // Local Chunk Check
         if (x >= 0 && x < Size && z >= 0 && z < Size)
-            return Blocks[x, y, z] == 0;
+        {
+            blockID = Blocks[x, y, z];
+        }
+        // Neighbor Chunk Checks
+        else if (x >= Size) blockID = right == null ? (byte)0 : right.Blocks[0, y, z];
+        else if (x < 0) blockID = left == null ? (byte)0 : left.Blocks[Size - 1, y, z];
+        else if (z >= Size) blockID = front == null ? (byte)0 : front.Blocks[x, y, 0];
+        else if (z < 0) blockID = back == null ? (byte)0 : back.Blocks[x, y, Size - 1];
+        else return true;
 
-        if (x >= Size) return right == null || right.Blocks[0, y, z] == 0;
-        if (x < 0) return left == null || left.Blocks[Size - 1, y, z] == 0;
-        if (z >= Size) return front == null || front.Blocks[x, y, 0] == 0;
-        if (z < 0) return back == null || back.Blocks[x, y, Size - 1] == 0;
-
-        return true;
+        // LOGIC: A face should be visible if the neighbor is Air (0) OR Water (2)
+        // This allows you to see the ground through the water.
+        return blockID == 0 || blockID == 2;
     }
 
     // Inside Chunk.cs
     private void AddVertex(List<float> v, Vector3 pos, Vector3 color, Vector2 uv)
     {
-        // Position
         v.Add(pos.X); v.Add(pos.Y); v.Add(pos.Z);
-        // Color
         v.Add(color.X); v.Add(color.Y); v.Add(color.Z);
-        // UVs (New! This prepares you for texturing)
         v.Add(uv.X); v.Add(uv.Y);
     }
 
-    private void AddQuad(List<float> v, Vector3 c1, Vector3 c2, Vector3 c3, Vector3 c4, Vector3 color, int w = 1, int h = 1)
+    private (Vector2 min, Vector2 max, Vector3 color) GetFaceData(byte type, string face, int w, int h)
     {
-        // Triangle 1
-        AddVertex(v, c1, color, new Vector2(0, 0));
-        AddVertex(v, c2, color, new Vector2(w, 0));
-        AddVertex(v, c3, color, new Vector2(w, h));
+        float atlasWidthTiles = 4f; // Updated from 3 to 4
+        float atlasHeightTiles = 1f;
+
+        float uUnit = 1.0f / atlasWidthTiles;
+        float vUnit = 1.0f / atlasHeightTiles;
+
+        float uOffset = 0;
+
+        if (type == 2) // Water
+        {
+            uOffset = 3 * uUnit; // Jump to the 4th tile
+        }
+        else // Grass
+        {
+            if (face == "top") uOffset = 1 * uUnit;
+            else if (face == "bottom") uOffset = 2 * uUnit;
+            else uOffset = 0 * uUnit;
+        }
+
+        // We no longer need the 'type == 2 ? blue' logic here 
+        // because the Water texture itself will be blue!
+        Vector3 color = new Vector3(1.0f, 1.0f, 1.0f);
+
+        return (
+            new Vector2(uOffset, 0),
+            new Vector2(uOffset + (uUnit * w), vUnit * h),
+            color
+        );
+    }
+
+    // Inside Chunk.cs
+    public (float[] opaque, float[] water) FillVertexData()
+    {
+        List<float> opaqueBuffer = new List<float>();
+        List<float> waterBuffer = new List<float>();
+
+        var neighbors = _world.GetNeighbors(ChunkX, ChunkZ);
+        var r = neighbors.r; var l = neighbors.l;
+        var f = neighbors.f; var b = neighbors.b;
+
+        for (int x = 0; x < Size; x++)
+        {
+            for (int z = 0; z < Size; z++)
+            {
+                // We only need to loop up to the highest point in this column
+                int maxY = Math.Max(_heightMap[x, z], (int)BiomeManager.SEA_LEVEL);
+
+                for (int y = 0; y <= maxY; y++)
+                {
+                    byte blockType = Blocks[x, y, z];
+                    if (blockType == 0) continue;
+
+                    // Pick the correct buffer based on block type
+                    List<float> currentBuffer = (blockType == 2) ? waterBuffer : opaqueBuffer;
+
+                    if (blockType == 2) // WATER
+                    {
+                        if (ShouldRenderFace(blockType, x, y + 1, z, r, l, f, b))
+                        {
+                            // We pass a small offset to lower the plane
+                            float waterSurfaceHeight = 0.0625f;
+
+                            AddWaterPlane(currentBuffer, x, y, z, waterSurfaceHeight, blockType);
+                        }
+                        continue;
+                    }
+
+                    // OPAQUE BLOCK LOGIC (Grass, Dirt, etc.)
+                    bool up = ShouldRenderFace(blockType, x, y + 1, z, r, l, f, b);
+                    bool down = ShouldRenderFace(blockType, x, y - 1, z, r, l, f, b);
+                    bool left = ShouldRenderFace(blockType, x - 1, y, z, r, l, f, b);
+                    bool right = ShouldRenderFace(blockType, x + 1, y, z, r, l, f, b);
+                    bool front = ShouldRenderFace(blockType, x, y, z + 1, r, l, f, b);
+                    bool back = ShouldRenderFace(blockType, x, y, z - 1, r, l, f, b);
+
+                    if (up) AddGreedyFace(currentBuffer, x, y, z, 1, 1, true, blockType);
+                    if (down) AddBottomFace(currentBuffer, x, y, z, blockType);
+                    if (left) AddVerticalGreedySide(currentBuffer, x, y, z, 1, 0, blockType);
+                    if (right) AddVerticalGreedySide(currentBuffer, x, y, z, 1, 1, blockType);
+                    if (front) AddVerticalGreedySide(currentBuffer, x, y, z, 1, 2, blockType);
+                    if (back) AddVerticalGreedySide(currentBuffer, x, y, z, 1, 3, blockType);
+                }
+            }
+        }
+
+        return (opaqueBuffer.ToArray(), waterBuffer.ToArray());
+    }
+
+    private byte GetBlockId(int nx, int ny, int nz, Chunk? r, Chunk? l, Chunk? f, Chunk? b)
+    {
+        if (ny < 0 || ny >= Height) return 0;
+
+        // Inside this chunk
+        if (nx >= 0 && nx < Size && nz >= 0 && nz < Size)
+            return Blocks[nx, ny, nz];
+
+        // Neighboring chunks
+        if (nx >= Size) return r?.Blocks[0, ny, nz] ?? 0;
+        if (nx < 0) return l?.Blocks[Size - 1, ny, nz] ?? 0;
+        if (nz >= Size) return f?.Blocks[nx, ny, 0] ?? 0;
+        if (nz < 0) return b?.Blocks[nx, ny, Size - 1] ?? 0;
+
+        return 0;
+    }
+
+    private void AddWaterUnderside(List<float> v, int x, int y, int z, byte type)
+    {
+        var data = GetFaceData(type, "top", 1, 1);
+        float topY = y + 1.0f;
+
+        // Triangle 1 (Clockwise from top view = Counter-Clockwise from bottom view)
+        AddVertex(v, new Vector3(x, topY, z), data.color, new Vector2(data.min.X, data.min.Y));
+        AddVertex(v, new Vector3(x + 1, topY, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
+        AddVertex(v, new Vector3(x, topY, z + 1), data.color, new Vector2(data.min.X, data.max.Y));
+
         // Triangle 2
-        AddVertex(v, c3, color, new Vector2(w, h));
-        AddVertex(v, c4, color, new Vector2(0, h));
-        AddVertex(v, c1, color, new Vector2(0, 0));
+        AddVertex(v, new Vector3(x, topY, z), data.color, new Vector2(data.min.X, data.min.Y));
+        AddVertex(v, new Vector3(x + 1, topY, z), data.color, new Vector2(data.max.X, data.min.Y));
+        AddVertex(v, new Vector3(x + 1, topY, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
+    }
+
+    private void AddWaterPlane(List<float> v, int x, int y, int z, float offset, byte type)
+    {
+        var data = GetFaceData(type, "top", 1, 1);
+        float surfaceY = (y + 1) - offset; // This is the 1/16th drop
+
+        // --- TOP FACE (Visible from sky) ---
+        // Triangle 1
+        AddVertex(v, new Vector3(x, surfaceY, z), data.color, new Vector2(data.min.X, data.min.Y));
+        AddVertex(v, new Vector3(x, surfaceY, z + 1), data.color, new Vector2(data.min.X, data.max.Y));
+        AddVertex(v, new Vector3(x + 1, surfaceY, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
+        // Triangle 2
+        AddVertex(v, new Vector3(x, surfaceY, z), data.color, new Vector2(data.min.X, data.min.Y));
+        AddVertex(v, new Vector3(x + 1, surfaceY, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
+        AddVertex(v, new Vector3(x + 1, surfaceY, z), data.color, new Vector2(data.max.X, data.min.Y));
+
+        // --- UNDERSIDE FACE (Visible from underwater) ---
+        // Swapped winding so it's visible from below
+        AddVertex(v, new Vector3(x, surfaceY, z), data.color, new Vector2(data.min.X, data.min.Y));
+        AddVertex(v, new Vector3(x + 1, surfaceY, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
+        AddVertex(v, new Vector3(x, surfaceY, z + 1), data.color, new Vector2(data.min.X, data.max.Y));
+
+        AddVertex(v, new Vector3(x, surfaceY, z), data.color, new Vector2(data.min.X, data.min.Y));
+        AddVertex(v, new Vector3(x + 1, surfaceY, z), data.color, new Vector2(data.max.X, data.min.Y));
+        AddVertex(v, new Vector3(x + 1, surfaceY, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
     }
 }

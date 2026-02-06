@@ -4,6 +4,9 @@ using Silk.NET.Windowing;
 using Silk.NET.OpenGL;
 using System.Drawing;
 using System.Numerics;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Processing;
+using SixLabors.ImageSharp.PixelFormats;
 using System.Collections.Concurrent;
 using VoxelEngine_Silk.Net_1._0.World;
 using System.Diagnostics;
@@ -12,15 +15,22 @@ namespace VoxelEngine_Silk.Net_1._0;
 
 class RenderChunk
 {
-    public uint VAO;
-    public uint VBO;
-    public uint VertexCount;
+    // Pass 1: Solid
+    public uint OpaqueVAO;
+    public uint OpaqueVBO;
+    public uint OpaqueVertexCount;
+
+    // Pass 2: Water
+    public uint WaterVAO;
+    public uint WaterVBO;
+    public uint WaterVertexCount;
+
     public Vector3 WorldPosition;
 }
 
 class Program
 {
-    private static ConcurrentQueue<(Chunk chunk, float[] vertices)> _uploadQueue = new();
+    private static ConcurrentQueue<(Chunk chunk, (float[] opaque, float[] water) meshData)> _uploadQueue = new();
     private static ConcurrentQueue<(int x, int z)> _unloadQueue = new();
     private static IWindow window = null!;
     private static GL Gl = null!;
@@ -34,6 +44,7 @@ class Program
     private static int _frameCount;
     private static uint _totalVertexCount;
     private static Frustum _frustum = new Frustum();
+    private static uint _textureAtlas;
     private static VoxelWorld voxelWorld = new VoxelWorld();
     static void Main(string[] args)
     {
@@ -53,23 +64,35 @@ class Program
     private static unsafe void OnLoad()
     {
         Gl = GL.GetApi(window);
-        Gl.Enable(EnableCap.DepthTest);
+
+        // 1. Basic GL States
+        Gl.Enable(GLEnum.DepthTest);
+        Gl.Enable(GLEnum.CullFace); // Recommended: Don't render the inside of blocks
+
+        // 2. Setup Alpha Blending
+        Gl.Enable(GLEnum.Blend);
+        Gl.BlendFunc(GLEnum.SrcAlpha, GLEnum.OneMinusSrcAlpha);
+
         Gl.ClearColor(0.4f, 0.6f, 0.9f, 1.0f);
 
-        Stopwatch totalSw = Stopwatch.StartNew();
-
-        Task.Run(() => WorldStreamerLoop());
+        // 3. Texture and Shaders
+        LoadTextureAtlas("terrain.png");
 
         string vertexCode = File.ReadAllText("shader.vert");
         string fragmentCode = File.ReadAllText("shader.frag");
         uint vs = CompileShader(ShaderType.VertexShader, vertexCode);
         uint fs = CompileShader(ShaderType.FragmentShader, fragmentCode);
+
         Shader = Gl.CreateProgram();
         Gl.AttachShader(Shader, vs);
         Gl.AttachShader(Shader, fs);
         Gl.LinkProgram(Shader);
         Gl.DeleteShader(vs);
         Gl.DeleteShader(fs);
+
+        // 4. Input and Background Tasks
+        Stopwatch totalSw = Stopwatch.StartNew();
+        Task.Run(() => WorldStreamerLoop());
 
         Input = window.CreateInput();
         foreach (var mouse in Input.Mice) mouse.Cursor.CursorMode = CursorMode.Raw;
@@ -167,73 +190,87 @@ class Program
     {
         Task.Run(() =>
         {
-            List<float> buffer = GetBufferFromPool();
+            // 1. Call the new version of FillVertexData that returns (float[] opaque, float[] water)
+            var meshData = chunk.FillVertexData();
 
-            chunk.FillVertexData(buffer);
+            // 2. Enqueue the tuple. This matches the new ConcurrentQueue definition.
+            // It passes (chunk, (opaqueArray, waterArray))
+            _uploadQueue.Enqueue((chunk, meshData));
 
-            float[] vertices = buffer.ToArray();
-            _uploadQueue.Enqueue((chunk, vertices));
-
-            buffer.Clear();
-            _meshBuffers.Add(buffer);
+            chunk.IsDirty = false;
         });
     }
 
 
-    private static unsafe void FinalizeGPUUpload(Chunk chunk, float[] vertices)
+    private static unsafe void FinalizeGPUUpload(Chunk chunk, (float[] opaque, float[] water) meshData)
     {
-        lock (_renderChunks)
+        // Find or create the RenderChunk
+        RenderChunk? rc = _renderChunks.FirstOrDefault(c => c.WorldPosition == new Vector3(chunk.ChunkX * 16, 0, chunk.ChunkZ * 16));
+        if (rc == null)
         {
-            var existing = _renderChunks.Find(rc =>
-                (int)Math.Floor(rc.WorldPosition.X / 16.0f) == chunk.ChunkX &&
-                (int)Math.Floor(rc.WorldPosition.Z / 16.0f) == chunk.ChunkZ);
+            rc = new RenderChunk { WorldPosition = new Vector3(chunk.ChunkX * 16, 0, chunk.ChunkZ * 16) };
+            _renderChunks.Add(rc);
+        }
 
-            if (existing != null)
+        // Upload Opaque Data
+        UploadToVAO(ref rc.OpaqueVAO, ref rc.OpaqueVBO, meshData.opaque, out rc.OpaqueVertexCount);
+
+        // Upload Water Data
+        UploadToVAO(ref rc.WaterVAO, ref rc.WaterVBO, meshData.water, out rc.WaterVertexCount);
+    }
+
+
+    private static unsafe void UploadToVAO(ref uint vao, ref uint vbo, float[] data, out uint vertexCount)
+    {
+        vertexCount = (uint)(data.Length / 8); // 3 pos + 3 col + 2 uv = 8 floats per vertex
+        if (vertexCount == 0) return;
+
+        if (vao == 0) vao = Gl.GenVertexArray();
+        if (vbo == 0) vbo = Gl.GenBuffer();
+
+        Gl.BindVertexArray(vao);
+        Gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
+        fixed (float* d = data)
+            Gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), d, BufferUsageARB.StaticDraw);
+
+        // Pos
+        Gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)0);
+        Gl.EnableVertexAttribArray(0);
+        // Color
+        Gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(3 * sizeof(float)));
+        Gl.EnableVertexAttribArray(1);
+        // UV
+        Gl.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(6 * sizeof(float)));
+        Gl.EnableVertexAttribArray(2);
+    }
+
+    private static unsafe void LoadTextureAtlas(string path)
+    {
+        _textureAtlas = Gl.GenTexture();
+        Gl.BindTexture(GLEnum.Texture2D, _textureAtlas);
+
+        using (var img = Image.Load<Rgba32>(path))
+        {
+            // LOGGING: Check your file size in the console
+            Console.WriteLine($"[Texture Load] Path: {path} | Size: {img.Width}x{img.Height}");
+
+            img.Mutate(x => x.Flip(FlipMode.Vertical));
+            var pixels = new byte[4 * img.Width * img.Height];
+            img.CopyPixelDataTo(pixels);
+
+            // Fix for 16px wide textures (CS7014 fix: ensure no brackets here)
+            Gl.PixelStore(GLEnum.UnpackAlignment, 1);
+
+            fixed (void* p = pixels)
             {
-                Gl.DeleteVertexArray(existing.VAO);
-                Gl.DeleteBuffer(existing.VBO);
-                _totalVertexCount -= existing.VertexCount;
-                _renderChunks.Remove(existing);
+                Gl.TexImage2D(GLEnum.Texture2D, 0, (int)GLEnum.Rgba, (uint)img.Width, (uint)img.Height, 0, GLEnum.Rgba, GLEnum.UnsignedByte, p);
             }
         }
 
-        RenderChunk rc = new RenderChunk();
-        // Updated: Vertex now has 8 floats (Pos:3, Color:3, UV:2)
-        rc.VertexCount = (uint)(vertices.Length / 8);
-        rc.WorldPosition = new Vector3(chunk.ChunkX * Chunk.Size, 0, chunk.ChunkZ * Chunk.Size);
-
-        _totalVertexCount += rc.VertexCount;
-
-        rc.VAO = Gl.GenVertexArray();
-        Gl.BindVertexArray(rc.VAO);
-
-        rc.VBO = Gl.GenBuffer();
-        Gl.BindBuffer(BufferTargetARB.ArrayBuffer, rc.VBO);
-
-        fixed (void* v = vertices)
-        {
-            Gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(vertices.Length * sizeof(float)), v, BufferUsageARB.StaticDraw);
-        }
-
-        // New Stride: 8 floats * 4 bytes = 32 bytes
-        uint stride = 8 * sizeof(float);
-
-        // Attribute 0: Position (3 floats)
-        Gl.VertexAttribPointer(0, 3, GLEnum.Float, false, stride, (void*)0);
-        Gl.EnableVertexAttribArray(0);
-
-        // Attribute 1: Color (3 floats)
-        Gl.VertexAttribPointer(1, 3, GLEnum.Float, false, stride, (void*)(3 * sizeof(float)));
-        Gl.EnableVertexAttribArray(1);
-
-        // Attribute 2: UV Coordinates (2 floats)
-        Gl.VertexAttribPointer(2, 2, GLEnum.Float, false, stride, (void*)(6 * sizeof(float)));
-        Gl.EnableVertexAttribArray(2);
-
-        lock (_renderChunks)
-        {
-            _renderChunks.Add(rc);
-        }
+        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureMinFilter, (int)GLEnum.Nearest);
+        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureMagFilter, (int)GLEnum.Nearest);
+        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureWrapS, (int)GLEnum.ClampToEdge);
+        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureWrapT, (int)GLEnum.ClampToEdge);
     }
 
     private static void OnRender(double deltaTime)
@@ -241,51 +278,57 @@ class Program
         Gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
         Gl.UseProgram(Shader);
 
+        // Bind texture once
+        Gl.ActiveTexture(GLEnum.Texture0);
+        Gl.BindTexture(GLEnum.Texture2D, _textureAtlas);
+        Gl.Uniform1(Gl.GetUniformLocation(Shader, "uTexture"), 0);
+
+        // Setup matrices
         Vector3 eyePos = player.GetEyePosition();
-
         var view = Matrix4x4.CreateLookAt(eyePos, eyePos + player.CameraFront, player.CameraUp);
-        var projection = Matrix4x4.CreatePerspectiveFieldOfView(
-            70.0f * (float)Math.PI / 180.0f,
-            (float)window.Size.X / window.Size.Y,
-            0.1f,
-            2000.0f
-        );
+        var projection = Matrix4x4.CreatePerspectiveFieldOfView(70f * (float)Math.PI / 180f, (float)window.Size.X / window.Size.Y, 0.1f, 2000.0f);
 
-        // 1. Update the frustum with the current view-projection matrix
         _frustum.Update(view * projection);
-
         SetUniformMatrix(Shader, "uView", view);
         SetUniformMatrix(Shader, "uProjection", projection);
 
         RenderChunk[] chunksToDraw;
-        lock (_renderChunks)
-        {
-            chunksToDraw = _renderChunks.ToArray();
-        }
+        lock (_renderChunks) { chunksToDraw = _renderChunks.ToArray(); }
 
-        int renderedCount = 0;
+        // --- PASS 1: SOLID GEOMETRY ---
+        Gl.Disable(GLEnum.Blend);
+        Gl.DepthMask(true); // Solids MUST write to depth buffer
+
         foreach (var rc in chunksToDraw)
         {
-            // 2. Define the Chunk's Bounding Box (AABB)
-            // Chunk.Size is 16, Chunk.Height is 256
-            Vector3 min = rc.WorldPosition;
-            Vector3 max = rc.WorldPosition + new Vector3(16, 256, 16);
+            if (rc.OpaqueVertexCount == 0) continue;
+            if (!_frustum.IsBoxVisible(rc.WorldPosition, rc.WorldPosition + new Vector3(16, 256, 16))) continue;
 
-            // 3. Perform the Frustum Check
-            if (!_frustum.IsBoxVisible(min, max))
-                continue;
-
-            var model = Matrix4x4.CreateTranslation(rc.WorldPosition);
-            SetUniformMatrix(Shader, "uModel", model);
-
-            Gl.BindVertexArray(rc.VAO);
-            Gl.DrawArrays(PrimitiveType.Triangles, 0, rc.VertexCount);
-            renderedCount++;
+            SetUniformMatrix(Shader, "uModel", Matrix4x4.CreateTranslation(rc.WorldPosition));
+            Gl.BindVertexArray(rc.OpaqueVAO);
+            Gl.DrawArrays(PrimitiveType.Triangles, 0, rc.OpaqueVertexCount);
         }
 
-        // Optional: Log how many chunks were culled in the title bar
-        // window.Title = $"Rendering {renderedCount} / {chunksToDraw.Length} chunks";
+        // --- PASS 2: WATER GEOMETRY ---
+        Gl.Enable(GLEnum.Blend);
+        Gl.BlendFunc(GLEnum.SrcAlpha, GLEnum.OneMinusSrcAlpha);
+        Gl.DepthMask(false); // Water should NOT block things behind it in the depth buffer
+
+        foreach (var rc in chunksToDraw)
+        {
+            if (rc.WaterVertexCount == 0) continue;
+            if (!_frustum.IsBoxVisible(rc.WorldPosition, rc.WorldPosition + new Vector3(16, 256, 16))) continue;
+
+            SetUniformMatrix(Shader, "uModel", Matrix4x4.CreateTranslation(rc.WorldPosition));
+            Gl.BindVertexArray(rc.WaterVAO);
+            Gl.DrawArrays(PrimitiveType.Triangles, 0, rc.WaterVertexCount);
+        }
+
+        // Reset state for safety
+        Gl.DepthMask(true);
     }
+
+
 
     private static unsafe void SetUniformMatrix(uint shader, string name, Matrix4x4 matrix)
     {
@@ -319,8 +362,12 @@ class Program
 
                 if (existing != null)
                 {
-                    Gl.DeleteVertexArray(existing.VAO);
-                    Gl.DeleteBuffer(existing.VBO);
+                    // Delete BOTH sets of GPU objects
+                    if (existing.OpaqueVAO != 0) Gl.DeleteVertexArray(existing.OpaqueVAO);
+                    if (existing.OpaqueVBO != 0) Gl.DeleteBuffer(existing.OpaqueVBO);
+                    if (existing.WaterVAO != 0) Gl.DeleteVertexArray(existing.WaterVAO);
+                    if (existing.WaterVBO != 0) Gl.DeleteBuffer(existing.WaterVBO);
+
                     _renderChunks.Remove(existing);
                 }
             }
@@ -329,8 +376,9 @@ class Program
         int uploadLimit = _uploadQueue.Count > 100 ? 50 : 5;
         for (int i = 0; i < uploadLimit; i++)
         {
+            // 'data.meshData' now contains the tuple of (opaque, water)
             if (_uploadQueue.TryDequeue(out var data))
-                FinalizeGPUUpload(data.chunk, data.vertices);
+                FinalizeGPUUpload(data.chunk, data.meshData);
             else break;
         }
 
@@ -341,22 +389,10 @@ class Program
         if (_timePassed >= 1.0)
         {
             double fps = _frameCount / _timePassed;
-
-
-            float minX = player.Position.X - player.Radius;
-            float maxX = player.Position.X + player.Radius;
-            float minZ = player.Position.Z - player.Radius;
-            float maxZ = player.Position.Z + player.Radius;
-
-            window.Title = $"FPS: {fps:F0} | " +
-                           $"Feet: ({player.Position.X:F2}, {player.Position.Y:F2}, {player.Position.Z:F2}) | " +
-                           $"Cam: ({CameraPosition.X:F2}, {CameraPosition.Y:F2}, {CameraPosition.Z:F2}) | " +
-                           $"Box X: [{minX:F2} to {maxX:F2}] Z: [{minZ:F2} to {maxZ:F2}]";
-
+            window.Title = $"FPS: {fps:F0} | Position: {player.Position.X:F1}, {player.Position.Y:F1}, {player.Position.Z:F1}";
             _timePassed = 0;
             _frameCount = 0;
         }
-
 
         if (keyboard.IsKeyPressed(Key.Escape)) window.Close();
     }

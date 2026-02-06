@@ -189,6 +189,22 @@
           }
         }
       },
+      "SixLabors.ImageSharp/3.1.12": {
+        "type": "package",
+        "compile": {
+          "lib/net6.0/SixLabors.ImageSharp.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net6.0/SixLabors.ImageSharp.dll": {
+            "related": ".xml"
+          }
+        },
+        "build": {
+          "build/SixLabors.ImageSharp.props": {}
+        }
+      },
       "System.Memory/4.6.3": {
         "type": "package",
         "compile": {
@@ -578,6 +594,22 @@
         "silkdotnet_v3.png"
       ]
     },
+    "SixLabors.ImageSharp/3.1.12": {
+      "sha512": "iAg6zifihXEFS/t7fiHhZBGAdCp3FavsF4i2ZIDp0JfeYeDVzvmlbY1CNhhIKimaIzrzSi5M/NBFcWvZT2rB/A==",
+      "type": "package",
+      "path": "sixlabors.imagesharp/3.1.12",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "LICENSE",
+        "build/SixLabors.ImageSharp.props",
+        "lib/net6.0/SixLabors.ImageSharp.dll",
+        "lib/net6.0/SixLabors.ImageSharp.xml",
+        "sixlabors.imagesharp.128.png",
+        "sixlabors.imagesharp.3.1.12.nupkg.sha512",
+        "sixlabors.imagesharp.nuspec"
+      ]
+    },
     "System.Memory/4.6.3": {
       "sha512": "qdcDOgnFZY40+Q9876JUHnlHu7bosOHX8XISRoH94fwk6hgaeQGSgfZd8srWRZNt5bV9ZW2TljcegDNxsf+96A==",
       "type": "package",
@@ -673,7 +705,8 @@
     "net9.0": [
       "Silk.NET.Input >= 2.23.0",
       "Silk.NET.OpenGL >= 2.23.0",
-      "Silk.NET.Windowing >= 2.23.0"
+      "Silk.NET.Windowing >= 2.23.0",
+      "SixLabors.ImageSharp >= 3.1.12"
     ]
   },
   "packageFolders": {
@@ -730,6 +763,10 @@
           "Silk.NET.Windowing": {
             "target": "Package",
             "version": "[2.23.0, )"
+          },
+          "SixLabors.ImageSharp": {
+            "target": "Package",
+            "version": "[3.1.12, )"
           }
         },
         "imports": [

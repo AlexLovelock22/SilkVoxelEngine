@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "T97O4nFAa04=",
+  "dgSpecHash": "sazO+IkiN6g=",
   "success": true,
   "projectFilePath": "C:\\Users\\kloak\\VoxelEngine-Silk.Net-1.0\\VoxelEngine-Silk.Net-1.0.csproj",
   "expectedPackageFiles": [
@@ -17,6 +17,7 @@
     "C:\\Users\\kloak\\.nuget\\packages\\silk.net.windowing\\2.23.0\\silk.net.windowing.2.23.0.nupkg.sha512",
     "C:\\Users\\kloak\\.nuget\\packages\\silk.net.windowing.common\\2.23.0\\silk.net.windowing.common.2.23.0.nupkg.sha512",
     "C:\\Users\\kloak\\.nuget\\packages\\silk.net.windowing.glfw\\2.23.0\\silk.net.windowing.glfw.2.23.0.nupkg.sha512",
+    "C:\\Users\\kloak\\.nuget\\packages\\sixlabors.imagesharp\\3.1.12\\sixlabors.imagesharp.3.1.12.nupkg.sha512",
     "C:\\Users\\kloak\\.nuget\\packages\\system.memory\\4.6.3\\system.memory.4.6.3.nupkg.sha512",
     "C:\\Users\\kloak\\.nuget\\packages\\system.numerics.vectors\\4.6.1\\system.numerics.vectors.4.6.1.nupkg.sha512",
     "C:\\Users\\kloak\\.nuget\\packages\\system.runtime.compilerservices.unsafe\\6.1.2\\system.runtime.compilerservices.unsafe.6.1.2.nupkg.sha512",

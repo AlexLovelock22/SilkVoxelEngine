@@ -35,3 +35,4 @@ C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\refint\VoxelEngine-Silk
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEngine-Silk.Net-1.0.pdb
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEngine-Silk.Net-1.0.genruntimeconfig.cache
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\ref\VoxelEngine-Silk.Net-1.0.dll
+C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\SixLabors.ImageSharp.dll
