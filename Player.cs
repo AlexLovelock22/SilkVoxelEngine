@@ -7,7 +7,7 @@ namespace VoxelEngine_Silk.Net_1._0;
 
 public class Player
 {
-    public Vector3 Position;      
+    public Vector3 Position;
     public Vector3 Velocity;
     public bool IsGrounded { get; private set; }
     public bool IsFlying = false;
@@ -61,84 +61,103 @@ public class Player
         CameraFront = Vector3.Normalize(direction);
     }
 
-    public void Update(double dt, IKeyboard keyboard, VoxelWorld world)
+    public void Update(double deltaTime, IKeyboard keyboard, VoxelWorld world)
     {
-        float delta = (float)dt;
+        float dt = (float)deltaTime;
+        long currentTime = Stopwatch.GetTimestamp() / (Stopwatch.Frequency / 1000);
 
+        // 1. Double-Tap Space to Toggle Fly
+        // We check this at the very start so it works regardless of being in water/air
         if (keyboard.IsKeyPressed(Key.Space))
         {
-            long currentTime = Stopwatch.GetTimestamp() / (Stopwatch.Frequency / 1000);
             if (currentTime - _lastSpaceTime < 250 && currentTime - _lastSpaceTime > 50)
             {
                 IsFlying = !IsFlying;
-                Velocity = Vector3.Zero;
+                Velocity.Y = 0; // Reset momentum on toggle
+                _lastSpaceTime = 0; // Prevent triple-tap triggers
             }
-            _lastSpaceTime = currentTime;
+            else
+            {
+                _lastSpaceTime = currentTime;
+            }
         }
 
-        Vector3 inputDir = GetInputDirection(keyboard);
-        float currentSpeed = IsFlying ? 20.0f : WALK_SPEED;
+        // 2. Detect Environment
+        Vector3 eyePos = GetEyePosition();
+        bool inWater = world.GetBlock((int)Math.Floor(Position.X), (int)Math.Floor(Position.Y), (int)Math.Floor(Position.Z)) == 2 ||
+                       world.GetBlock((int)Math.Floor(eyePos.X), (int)Math.Floor(eyePos.Y), (int)Math.Floor(eyePos.Z)) == 2;
 
+        UpdateCameraVectors();
+        Vector3 inputDir = GetInputDirection(keyboard);
+
+        // 3. Apply Movement Physics
         if (IsFlying)
         {
-            Velocity.Y = 0;
-            if (keyboard.IsKeyPressed(Key.Space)) Position.Y += currentSpeed * delta;
-            if (keyboard.IsKeyPressed(Key.ShiftLeft)) Position.Y -= currentSpeed * delta;
+            // FLYING PHYSICS
+            float flySpeed = WALK_SPEED * 3.0f;
+            Velocity.X = inputDir.X * flySpeed;
+            Velocity.Z = inputDir.Z * flySpeed;
+
+            if (keyboard.IsKeyPressed(Key.Space)) Velocity.Y = flySpeed;
+            else if (keyboard.IsKeyPressed(Key.ShiftLeft)) Velocity.Y = -flySpeed;
+            else Velocity.Y = 0;
+        }
+        else if (inWater)
+        {
+            // SWIMMING PHYSICS
             IsGrounded = false;
+            float swimSpeed = WALK_SPEED * 0.7f;
+
+            // Move in camera direction (allows swimming up/down by looking)
+            Vector3 moveDir = CameraFront * inputDir.Z + Vector3.Cross(CameraFront, CameraUp) * inputDir.X;
+
+            if (inputDir.Length() > 0)
+            {
+                Velocity = moveDir * swimSpeed;
+            }
+            else
+            {
+                Velocity.X = 0;
+                Velocity.Z = 0;
+                Velocity.Y -= GRAVITY * 0.05f * dt; // Slow sink
+            }
+
+            if (keyboard.IsKeyPressed(Key.Space)) Velocity.Y = swimSpeed * 0.8f;
+            if (keyboard.IsKeyPressed(Key.ShiftLeft)) Velocity.Y = -swimSpeed * 0.8f;
         }
         else
         {
-            if (IsGrounded)
+            // WALKING PHYSICS
+            Velocity.X = inputDir.X * WALK_SPEED;
+            Velocity.Z = inputDir.Z * WALK_SPEED;
+
+            if (!IsGrounded) Velocity.Y += GRAVITY * dt;
+
+            if (keyboard.IsKeyPressed(Key.Space) && IsGrounded)
             {
-                Velocity.Y = 0;
-                if (keyboard.IsKeyPressed(Key.Space))
-                {
-                    Velocity.Y = JUMP_FORCE;
-                    IsGrounded = false;
-                }
-            }
-            else
-            {
-                Velocity.Y += GRAVITY * delta;
+                Velocity.Y = JUMP_FORCE;
+                IsGrounded = false;
             }
         }
 
-        float moveX = inputDir.X * currentSpeed * delta;
-        if (moveX != 0)
+        // 4. Collision Resolution (X, Y, Z)
+        Vector3 nextPos = Position + Velocity * dt;
+
+        if (!CheckCollision(new Vector3(nextPos.X, Position.Y, Position.Z), world))
+            Position.X = nextPos.X;
+        else Velocity.X = 0;
+
+        if (!CheckCollision(new Vector3(Position.X, nextPos.Y, Position.Z), world))
+            Position.Y = nextPos.Y;
+        else
         {
-            Vector3 nextX = Position + new Vector3(moveX, 0, 0);
-            if (!CheckCollision(nextX, world))
-                Position.X = nextX.X;
+            if (Velocity.Y < 0) IsGrounded = true;
+            Velocity.Y = 0;
         }
 
-        float moveZ = inputDir.Z * currentSpeed * delta;
-        if (moveZ != 0)
-        {
-            Vector3 nextZ = Position + new Vector3(0, 0, moveZ);
-            if (!CheckCollision(nextZ, world))
-                Position.Z = nextZ.Z;
-        }
-
-        if (!IsFlying)
-        {
-            float moveY = Velocity.Y * delta;
-            Vector3 nextY = Position + new Vector3(0, moveY, 0);
-
-            if (CheckCollision(nextY, world))
-            {
-                if (Velocity.Y < 0) // Falling
-                {
-                    Position.Y = MathF.Floor(nextY.Y + 0.05f) + 1.0f;
-                    IsGrounded = true;
-                }
-                Velocity.Y = 0;
-            }
-            else
-            {
-                Position.Y = nextY.Y;
-                IsGrounded = CheckCollision(Position + new Vector3(0, -0.01f, 0), world);
-            }
-        }
+        if (!CheckCollision(new Vector3(Position.X, Position.Y, nextPos.Z), world))
+            Position.Z = nextPos.Z;
+        else Velocity.Z = 0;
     }
 
     private bool CheckCollision(Vector3 pos, VoxelWorld world)
@@ -158,7 +177,10 @@ public class Player
                     int by = (int)Math.Floor(checkPos.Y);
                     int bz = (int)Math.Floor(checkPos.Z);
 
-                    if (world.GetBlock(bx, by, bz) != 0) return true;
+                    byte block = world.GetBlock(bx, by, bz);
+
+                    // Ignore Air (0) and Water (2) for physical movement collision
+                    if (block != 0 && block != 2) return true;
                 }
             }
         }
