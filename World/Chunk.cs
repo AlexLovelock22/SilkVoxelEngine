@@ -29,6 +29,7 @@ public class Chunk
     private void GenerateTerrain(VoxelWorld world)
     {
         _highestPoint = 0;
+        const int SEA_LEVEL = 64; // Match your BiomeManager sea level
 
         for (int x = 0; x < Size; x++)
         {
@@ -37,35 +38,51 @@ public class Chunk
                 float worldX = (ChunkX * Size) + x;
                 float worldZ = (ChunkZ * Size) + z;
 
-                // 1. MACRO HEIGHT (Continental Layer)
-                // We use a much lower scale (0.05f or even lower) so it changes slowly.
-                // This ensures the world isn't just a flat plane at SEA_LEVEL.
-                // Inside Chunk.cs GenerateTerrain
+                // 1. MACRO & CLIMATE
                 float macroNoise = world.HeightNoise.GetNoise(worldX * 0.005f, worldZ * 0.005f);
                 float continentalOffset = macroNoise * 40f;
 
-                // 2. CLIMATE DATA
                 float temp = (world.TempNoise.GetNoise(worldX * 0.5f, worldZ * 0.5f) + 1f) / 2f;
                 float humidity = (world.HumidityNoise.GetNoise(worldX * 0.5f, worldZ * 0.5f) + 1f) / 2f;
 
-                // 3. WEIGHTED BIOME BLENDING
-                // This calculates the "local" biome height (bumps, mountains, etc.)
+                // 2. BASE BIOME HEIGHT
                 float biomeHeight = GetWeightedHeight(world, worldX, worldZ, temp, humidity);
-
-                // 4. FINAL COMPOSITE HEIGHT
-                // Combine the local biome features with the global continental rise/fall
                 float finalHeightFloat = biomeHeight + continentalOffset;
+
+                // 3. RIVER CARVING (New!)
+                // We take the absolute value of Perlin noise to get "ridged" lines
+                float riverSample = MathF.Abs(world.RiverNoise.GetNoise(worldX, worldZ));
+                float riverThreshold = 0.02f; // Smaller = narrower rivers
+
+                if (riverSample < riverThreshold)
+                {
+                    // Calculate how deep to carve based on how close we are to the river center
+                    float riverCurve = 1.0f - (riverSample / riverThreshold);
+                    // Push the ground down (up to 15 blocks deep)
+                    finalHeightFloat -= (riverCurve * 15f);
+                }
 
                 int finalHeight = (int)MathF.Round(finalHeightFloat);
                 finalHeight = Math.Clamp(finalHeight, 0, Height - 1);
 
-                // 5. DATA STORAGE
                 _heightMap[x, z] = finalHeight;
                 if (finalHeight > _highestPoint) _highestPoint = finalHeight;
 
+                // 4. BLOCK FILLING (Updated for Water)
                 for (int y = 0; y < Height; y++)
                 {
-                    Blocks[x, y, z] = (y <= finalHeight) ? (byte)1 : (byte)0;
+                    if (y <= finalHeight)
+                    {
+                        Blocks[x, y, z] = 1; // Solid Ground (Stone/Dirt)
+                    }
+                    else if (y <= SEA_LEVEL)
+                    {
+                        Blocks[x, y, z] = 2; // WATER BLOCK
+                    }
+                    else
+                    {
+                        Blocks[x, y, z] = 0; // Air
+                    }
                 }
             }
         }

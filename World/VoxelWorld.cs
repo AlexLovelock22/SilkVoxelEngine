@@ -11,6 +11,7 @@ public class VoxelWorld
     public FastNoiseLite HeightNoise = new();
     public FastNoiseLite TempNoise = new();
     public FastNoiseLite HumidityNoise = new();
+    public FastNoiseLite RiverNoise = new();
     public (Chunk? r, Chunk? l, Chunk? f, Chunk? b) GetNeighbors(int cx, int cz)
     {
         Chunks.TryGetValue((cx + 1, cz), out var r);
@@ -43,6 +44,9 @@ public class VoxelWorld
         // Setting this slightly higher than Temp prevents biomes from looking like circles
         HumidityNoise.SetFrequency(0.005f);
         HumidityNoise.SetSeed(1337);
+
+        RiverNoise.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
+        RiverNoise.SetFrequency(0.002f);
     }
 
 
