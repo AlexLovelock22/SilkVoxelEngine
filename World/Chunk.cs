@@ -185,8 +185,6 @@ public class Chunk
             }
         }
 
-        // 2. SIDES AND BOTTOM (Optimized Vertical Loop)
-        // 2. SIDES (Greedy Vertical Meshing)
         for (int x = 0; x < Size; x++)
         {
             for (int z = 0; z < Size; z++)
@@ -194,36 +192,30 @@ public class Chunk
                 int columnTop = GetSurfaceHeight(x, z);
                 if (columnTop < 0) continue;
 
-                // We process each of the 4 side directions separately to find vertical strips
-                // 0: Left, 1: Right, 2: Front, 3: Back
                 for (int side = 0; side < 4; side++)
                 {
                     for (int y = 0; y <= columnTop; y++)
                     {
                         if (Blocks[x, y, z] == 0) continue;
 
-                        // 1. Determine which neighbor to check based on the side
                         int nx = x, nz = z;
                         if (side == 0) nx--;
                         else if (side == 1) nx++;
                         else if (side == 2) nz++; else if (side == 3) nz--;
 
-                        // 2. Only start a greedy strip if this face is visible (IsAir)
                         if (IsAir(nx, y, nz, right, left, front, back))
                         {
                             int startY = y;
                             int height = 1;
 
-                            // 3. Look UP to see how many identical faces we can merge vertically
                             while (y + 1 <= columnTop &&
                                    Blocks[x, y + 1, z] != 0 &&
                                    IsAir(nx, y + 1, nz, right, left, front, back))
                             {
                                 height++;
-                                y++; // Skip these blocks in the main 'y' loop
+                                y++;
                             }
 
-                            // 4. Add ONE tall quad for the entire vertical strip
                             AddVerticalGreedySide(vertices, x, startY, z, height, side);
                         }
                     }
@@ -237,54 +229,41 @@ public class Chunk
     {
         const float r = 0.45f; const float g = 0.45f; const float b = 0.45f;
 
-        // Full integer height: from bottom of first block to top of last block
         float yMin = y;
         float yMax = y + h;
 
-        // side 0: Left (-X) at x
         if (side == 0)
             AddFace(v, x, yMax, z + 1, x, yMax, z, x, yMin, z, x, yMin, z + 1, r, g, b);
-        // side 1: Right (+X) at x + 1
         else if (side == 1)
             AddFace(v, x + 1, yMax, z, x + 1, yMax, z + 1, x + 1, yMin, z + 1, x + 1, yMin, z, r, g, b);
-        // side 2: Front (+Z) at z + 1
         else if (side == 2)
             AddFace(v, x, yMax, z + 1, x + 1, yMax, z + 1, x + 1, yMin, z + 1, x, yMin, z + 1, r, g, b);
-        // side 3: Back (-Z) at z
         else if (side == 3)
             AddFace(v, x + 1, yMax, z, x, yMax, z, x, yMin, z, x + 1, yMin, z, r, g, b);
     }
-
-
-
 
     private void AddGreedyFace(List<float> v, float x, float y, float z, int w, int d, bool up)
     {
         const float r = 0.5f; const float g = 0.5f; const float b = 0.5f;
 
-        // Use pure integers for the corners
         float xMin = x;
         float xMax = x + w;
         float zMin = z;
         float zMax = z + d;
 
-        // THE FIX: If the block is at index Y, the surface is at Y + 1
         float yTop = y + 1.0f;
 
-        // Triangle 1
         AddVertex(v, xMin, yTop, zMin, r, g, b);
         AddVertex(v, xMax, yTop, zMin, r, g, b);
         AddVertex(v, xMax, yTop, zMax, r, g, b);
-        // Triangle 2
+
         AddVertex(v, xMax, yTop, zMax, r, g, b);
         AddVertex(v, xMin, yTop, zMax, r, g, b);
         AddVertex(v, xMin, yTop, zMin, r, g, b);
     }
 
-    // Helper to find the top block at a coordinate
     private int GetSurfaceHeight(int x, int z)
     {
-        // Search from the very top of the 256-height world downwards
         for (int y = Height - 1; y >= 0; y--)
         {
             if (Blocks[x, y, z] != 0) return y;
@@ -294,16 +273,11 @@ public class Chunk
 
     private bool IsAir(int x, int y, int z, Chunk right, Chunk left, Chunk front, Chunk back)
     {
-        // 1. UPDATED: Check against Height (256) instead of Size (16)
-        // This prevents mountains from being culled incorrectly at the old ceiling
         if (y < 0 || y >= Height) return true;
 
-        // 2. Local check (Internal to this chunk)
         if (x >= 0 && x < Size && z >= 0 && z < Size)
             return Blocks[x, y, z] == 0;
 
-        // 3. Neighbor checks (Horizontal boundaries)
-        // Note: We still use 'Size' here because the chunks are still 16x16 wide.
         if (x >= Size) return right == null || right.Blocks[0, y, z] == 0;
         if (x < 0) return left == null || left.Blocks[Size - 1, y, z] == 0;
         if (z >= Size) return front == null || front.Blocks[x, y, 0] == 0;
@@ -312,7 +286,6 @@ public class Chunk
         return true;
     }
 
-    // Optimization 2: Manual vertex feeding (ZERO temporary array allocations)
     private void AddVertex(List<float> v, float x, float y, float z, float r, float g, float b)
     {
         v.Add(x); v.Add(y); v.Add(z);
@@ -326,11 +299,11 @@ public class Chunk
         float x4, float y4, float z4,
         float r, float g, float b)
     {
-        // Triangle 1
+  
         AddVertex(v, x1, y1, z1, r, g, b);
         AddVertex(v, x2, y2, z2, r, g, b);
         AddVertex(v, x3, y3, z3, r, g, b);
-        // Triangle 2
+
         AddVertex(v, x3, y3, z3, r, g, b);
         AddVertex(v, x4, y4, z4, r, g, b);
         AddVertex(v, x1, y1, z1, r, g, b);
