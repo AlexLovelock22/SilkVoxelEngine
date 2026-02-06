@@ -87,32 +87,30 @@ public class Player
                        world.GetBlock((int)Math.Floor(eyePos.X), (int)Math.Floor(eyePos.Y), (int)Math.Floor(eyePos.Z)) == 2;
 
         UpdateCameraVectors();
-
-        // This now returns a vector already pointing where the camera looks
         Vector3 moveDir = GetInputDirection(keyboard);
-        float currentSpeed = IsFlying ? 20.0f : WALK_SPEED;
+
+        float currentMaxSpeed = IsFlying ? 20.0f : (WALK_SPEED * 1.6f);
         float swimSpeed = WALK_SPEED * 0.7f;
 
         // 3. Apply Vertical Physics
         if (IsFlying)
         {
             Velocity.Y = 0;
-            if (keyboard.IsKeyPressed(Key.Space)) Position.Y += currentSpeed * dt;
-            if (keyboard.IsKeyPressed(Key.ShiftLeft)) Position.Y -= currentSpeed * dt;
+            if (keyboard.IsKeyPressed(Key.Space)) Position.Y += 20.0f * dt;
+            if (keyboard.IsKeyPressed(Key.ShiftLeft)) Position.Y -= 20.0f * dt;
             IsGrounded = false;
         }
         else if (inWater)
         {
             IsGrounded = false;
-            Velocity.Y -= Velocity.Y * 3.0f * dt; // Drag
-            Velocity.Y -= 4.0f * dt;             // Sinking
+            Velocity.Y -= Velocity.Y * 3.0f * dt; // Water Drag
+            Velocity.Y -= 4.0f * dt;             // Sinking force
 
             if (keyboard.IsKeyPressed(Key.Space)) Velocity.Y += (swimSpeed * 8.0f) * dt;
             if (keyboard.IsKeyPressed(Key.ShiftLeft)) Velocity.Y -= (swimSpeed * 5.0f) * dt;
         }
         else
         {
-            // OLD VERTICAL LOGIC
             if (IsGrounded)
             {
                 Velocity.Y = 0;
@@ -128,42 +126,48 @@ public class Player
             }
         }
 
-        // 4. Update Horizontal Velocity
-        if (inWater && !IsFlying)
+        // 4. Horizontal Velocity with Tuned Inertia
+        if (IsFlying)
         {
-            Velocity.X -= Velocity.X * 3.0f * dt;
-            Velocity.Z -= Velocity.Z * 3.0f * dt;
-
-            if (moveDir.Length() > 0)
-            {
-                // For swimming, we use the raw CameraFront to allow vertical swimming
-                Vector3 swimForward = CameraFront;
-                Vector3 swimRight = Vector3.Normalize(Vector3.Cross(swimForward, Vector3.UnitY));
-
-                // Re-calculate moveDir specifically for water to include Y
-                Vector3 waterMove = Vector3.Zero;
-                if (keyboard.IsKeyPressed(Key.W)) waterMove += swimForward;
-                if (keyboard.IsKeyPressed(Key.S)) waterMove -= swimForward;
-                if (keyboard.IsKeyPressed(Key.A)) waterMove -= swimRight;
-                if (keyboard.IsKeyPressed(Key.D)) waterMove += swimRight;
-
-                if (waterMove != Vector3.Zero)
-                {
-                    Vector3 accel = Vector3.Normalize(waterMove) * swimSpeed * 5.0f;
-                    Velocity.X += accel.X * dt;
-                    Velocity.Z += accel.Z * dt;
-                    Velocity.Y += accel.Y * dt;
-                }
-            }
+            Velocity.X = moveDir.X * currentMaxSpeed;
+            Velocity.Z = moveDir.Z * currentMaxSpeed;
         }
         else
         {
-            // WALKING/FLYING: moveDir from GetInputDirection is already Camera-Relative
-            Velocity.X = moveDir.X * currentSpeed;
-            Velocity.Z = moveDir.Z * currentSpeed;
+            // --- TUNED PHYSICS CONSTANTS ---
+            float groundDrag = 12.0f;  // Higher = stops faster on ground
+            float airDrag = 1.0f;     // Lower = carries momentum in air
+            float currentDrag = IsGrounded ? groundDrag : airDrag;
+
+            // Acceleration power (8.0f on ground feels heavy but responsive)
+            float accelPower = IsGrounded ? 8.0f : 1.2f;
+
+            // 1. Apply Drag (Friction)
+            Velocity.X -= Velocity.X * currentDrag * dt;
+            Velocity.Z -= Velocity.Z * currentDrag * dt;
+
+            // 2. Add movement thrust
+            if (moveDir.Length() > 0)
+            {
+                float targetSpeed = inWater ? swimSpeed : currentMaxSpeed;
+                Velocity.X += moveDir.X * (targetSpeed * accelPower) * dt;
+                Velocity.Z += moveDir.Z * (targetSpeed * accelPower) * dt;
+
+                // Apply camera-look swimming if in water
+                if (inWater) Velocity.Y += moveDir.Y * (targetSpeed * accelPower) * dt;
+            }
+
+            // 3. Speed Governor (Hard Cap)
+            // Prevents acceleration math from making the player "super-sonic"
+            float horizontalSpeed = MathF.Sqrt(Velocity.X * Velocity.X + Velocity.Z * Velocity.Z);
+            if (horizontalSpeed > currentMaxSpeed && !inWater)
+            {
+                Velocity.X = (Velocity.X / horizontalSpeed) * currentMaxSpeed;
+                Velocity.Z = (Velocity.Z / horizontalSpeed) * currentMaxSpeed;
+            }
         }
 
-        // 5. OLD PER-AXIS COLLISION RESOLUTION
+        // 5. PER-AXIS COLLISION RESOLUTION
         // X Axis
         float moveX = Velocity.X * dt;
         if (moveX != 0)
@@ -171,6 +175,8 @@ public class Player
             Vector3 nextX = Position + new Vector3(moveX, 0, 0);
             if (!CheckCollision(nextX, world))
                 Position.X = nextX.X;
+            else
+                Velocity.X = 0;
         }
 
         // Z Axis
@@ -180,9 +186,11 @@ public class Player
             Vector3 nextZ = Position + new Vector3(0, 0, moveZ);
             if (!CheckCollision(nextZ, world))
                 Position.Z = nextZ.Z;
+            else
+                Velocity.Z = 0;
         }
 
-        // Y Axis (Only if not flying)
+        // Y Axis
         if (!IsFlying)
         {
             float moveY = Velocity.Y * dt;
@@ -190,7 +198,7 @@ public class Player
 
             if (CheckCollision(nextY, world))
             {
-                if (Velocity.Y < 0) // Falling
+                if (Velocity.Y < 0) // Landing
                 {
                     Position.Y = MathF.Floor(nextY.Y + 0.05f) + 1.0f;
                     IsGrounded = true;
@@ -200,7 +208,7 @@ public class Player
             else
             {
                 Position.Y = nextY.Y;
-                // Grounding check for walking off blocks
+                // Constant check to see if we've walked off an edge
                 IsGrounded = CheckCollision(Position + new Vector3(0, -0.01f, 0), world);
             }
         }
