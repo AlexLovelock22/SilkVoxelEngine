@@ -411,95 +411,93 @@ class Program
 
     private static void OnRender(double deltaTime)
     {
-        // 1. Get Simulation Data
         Vector3 sunDir = _timeManager.SunDirection;
         Vector3 eyePos = player.GetEyePosition();
 
-        // 2. Clear Buffers
+        Gl.DepthMask(true);
         Gl.ClearColor(0, 0, 0, 1.0f);
         Gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
-        // 3. Setup Camera Matrices
         var view = Matrix4x4.CreateLookAt(eyePos, eyePos + player.CameraFront, player.CameraUp);
         var projection = Matrix4x4.CreatePerspectiveFieldOfView(70f * (float)Math.PI / 180f, (float)window.Size.X / window.Size.Y, 0.1f, 2000.0f);
         _frustum.Update(view * projection);
 
-        // --- PASS 1: ATMOSPHERE & STARS ---
+        // --- PASS 1: SKYBOX ---
         Gl.UseProgram(_skyboxShader);
         Gl.Disable(GLEnum.CullFace);
         Gl.Disable(GLEnum.DepthTest);
+        Gl.DepthMask(false);
 
-        Gl.ActiveTexture(GLEnum.Texture3);
-        Gl.BindTexture(GLEnum.Texture2D, _starTexture);
-        Gl.Uniform1(Gl.GetUniformLocation(_skyboxShader, "uStarTex"), 3);
-
+        int timeLoc = Gl.GetUniformLocation(_skyboxShader, "uTime");
+        if (timeLoc != -1)
+        {
+            // Use TotalTicks / TicksPerSecond for a smooth, increasing float
+            float shaderTime = (float)((double)_timeManager.TotalTicks / TimeManager.TicksPerSecond);
+            Gl.Uniform1(timeLoc, shaderTime);
+        }
         _skybox.Render(_skyboxShader, view, projection, sunDir);
+        Gl.Flush(); // Ensure skybox commands are processed
 
-        // --- PASS 1.5: MINECRAFT SUN/MOON SPRITES ---
+        // --- PASS 1.5: SUN/MOON ---
         Gl.Enable(GLEnum.Blend);
         Gl.BlendFunc(GLEnum.SrcAlpha, GLEnum.OneMinusSrcAlpha);
-        // DepthTest stays off so they draw over the sky background
         RenderSunMoon(view, projection, sunDir);
 
-        // Re-enable for world
+        // --- PASS 2: WORLD (OPAQUE) ---
+        Gl.Disable(GLEnum.Blend);
         Gl.Enable(GLEnum.DepthTest);
         Gl.Enable(GLEnum.CullFace);
+        Gl.DepthMask(true);
 
-        // --- PASS 2: WORLD SHADER (BLOCKS) ---
         Gl.UseProgram(Shader);
-        int sunLoc = Gl.GetUniformLocation(Shader, "uSunDir");
-        Gl.Uniform3(sunLoc, sunDir.X, sunDir.Y, sunDir.Z);
-
         Gl.ActiveTexture(GLEnum.Texture0);
         Gl.BindTexture(GLEnum.Texture2D, _textureAtlas);
         Gl.Uniform1(Gl.GetUniformLocation(Shader, "uTexture"), 0);
-
+        Gl.Uniform3(Gl.GetUniformLocation(Shader, "uSunDir"), sunDir.X, sunDir.Y, sunDir.Z);
         SetUniformMatrix(Shader, "uView", view);
         SetUniformMatrix(Shader, "uProjection", projection);
 
         RenderChunk[] chunksToDraw;
         lock (_renderChunks) { chunksToDraw = _renderChunks.ToArray(); }
 
-        // --- SOLID PASS ---
-        Gl.Disable(GLEnum.Blend);
-        Gl.DepthMask(true);
-
         foreach (var rc in chunksToDraw)
         {
             if (rc.OpaqueVertexCount == 0) continue;
             if (!_frustum.IsBoxVisible(rc.WorldPosition, rc.WorldPosition + new Vector3(16, 256, 16))) continue;
-
             SetUniformMatrix(Shader, "uModel", Matrix4x4.CreateTranslation(rc.WorldPosition));
             Gl.BindVertexArray(rc.OpaqueVAO);
             Gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)rc.OpaqueVertexCount);
         }
 
-        // --- WATER PASS ---
+        // --- PASS 3: WATER ---
         Gl.Enable(GLEnum.Blend);
         Gl.DepthMask(false);
-
         foreach (var rc in chunksToDraw)
         {
             if (rc.WaterVertexCount == 0) continue;
-            if (!_frustum.IsBoxVisible(rc.WorldPosition, rc.WorldPosition + new Vector3(16, 256, 16))) continue;
-
             SetUniformMatrix(Shader, "uModel", Matrix4x4.CreateTranslation(rc.WorldPosition));
             Gl.BindVertexArray(rc.WaterVAO);
             Gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)rc.WaterVertexCount);
         }
 
-        // --- SELECTION BOX & UI ---
+        // --- PASS 4: SELECTION OUTLINE ---
         var result = Raycaster.Trace(voxelWorld, player.GetEyePosition(), player.CameraFront, 5.0f);
         if (result.Hit)
         {
+            Gl.Disable(GLEnum.Blend);
+            Gl.Enable(GLEnum.DepthTest);
+            Gl.DepthMask(false);
+
             Gl.Enable(EnableCap.PolygonOffsetLine);
             Gl.PolygonOffset(-1.0f, -1.0f);
             _selectionBox.Render(_selectionShader, result.IntPos, view, projection);
             Gl.Disable(EnableCap.PolygonOffsetLine);
         }
 
+        // --- PASS 5: UI ---
         Gl.Disable(EnableCap.DepthTest);
         _crosshair.Render(_crosshairShader);
+
         Gl.Enable(EnableCap.DepthTest);
         Gl.DepthMask(true);
     }

@@ -5,7 +5,7 @@ namespace VoxelEngine_Silk.Net_1._0.Game;
 public class TimeManager
 {
     public const int TicksPerDay = 24000;
-    public const double TicksPerSecond = 2000.0;
+    public const double TicksPerSecond = 200.0;
     private const double SecondsPerTick = 1.0 / TicksPerSecond;
 
     public long TotalTicks { get; private set; }
