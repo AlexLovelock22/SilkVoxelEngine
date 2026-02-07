@@ -146,67 +146,85 @@ public class Chunk
     {
         var face = isTop ? "top" : "bottom";
         var data = GetFaceData(type, face, w, d);
+        Vector3 normal = isTop ? new Vector3(0, 1, 0) : new Vector3(0, -1, 0);
 
         if (isTop)
         {
-            // Triangle 1
-            AddVertex(v, new Vector3(x, y + 1, z), data.color, new Vector2(data.min.X, data.min.Y));
-            AddVertex(v, new Vector3(x, y + 1, z + d), data.color, new Vector2(data.min.X, data.max.Y));
-            AddVertex(v, new Vector3(x + w, y + 1, z + d), data.color, new Vector2(data.max.X, data.max.Y));
-            // Triangle 2
-            AddVertex(v, new Vector3(x, y + 1, z), data.color, new Vector2(data.min.X, data.min.Y));
-            AddVertex(v, new Vector3(x + w, y + 1, z + d), data.color, new Vector2(data.max.X, data.max.Y));
-            AddVertex(v, new Vector3(x + w, y + 1, z), data.color, new Vector2(data.max.X, data.min.Y));
+            AddVertex(v, new Vector3(x, y + 1, z), data.color, new Vector2(data.min.X, data.min.Y), normal);
+            AddVertex(v, new Vector3(x, y + 1, z + d), data.color, new Vector2(data.min.X, data.max.Y), normal);
+            AddVertex(v, new Vector3(x + w, y + 1, z + d), data.color, new Vector2(data.max.X, data.max.Y), normal);
+
+            AddVertex(v, new Vector3(x, y + 1, z), data.color, new Vector2(data.min.X, data.min.Y), normal);
+            AddVertex(v, new Vector3(x + w, y + 1, z + d), data.color, new Vector2(data.max.X, data.max.Y), normal);
+            AddVertex(v, new Vector3(x + w, y + 1, z), data.color, new Vector2(data.max.X, data.min.Y), normal);
+        }
+        else
+        {
+            // Bottom faces use the same logic but with normal (0, -1, 0)
+            AddVertex(v, new Vector3(x, y, z), data.color, new Vector2(data.min.X, data.min.Y), normal);
+            AddVertex(v, new Vector3(x + w, y, z + d), data.color, new Vector2(data.max.X, data.max.Y), normal);
+            AddVertex(v, new Vector3(x, y, z + d), data.color, new Vector2(data.min.X, data.max.Y), normal);
+
+            AddVertex(v, new Vector3(x, y, z), data.color, new Vector2(data.min.X, data.min.Y), normal);
+            AddVertex(v, new Vector3(x + w, y, z), data.color, new Vector2(data.max.X, data.min.Y), normal);
+            AddVertex(v, new Vector3(x + w, y, z + d), data.color, new Vector2(data.max.X, data.max.Y), normal);
         }
     }
 
+    // 3. Update AddVerticalGreedySide for Side normals
     private void AddVerticalGreedySide(List<float> v, int x, int y, int z, int height, int side, byte type)
     {
         var data = GetFaceData(type, "side", 1, height);
-        Vector3 finalColor = data.color * 0.8f; // Shading for sides
-
         Vector3 p1, p2, p3, p4;
+        Vector3 normal;
+
         switch (side)
         {
             case 0: // Left (-X)
                 p1 = new Vector3(x, y, z); p2 = new Vector3(x, y, z + 1);
                 p3 = new Vector3(x, y + height, z + 1); p4 = new Vector3(x, y + height, z);
+                normal = new Vector3(-1, 0, 0);
                 break;
             case 1: // Right (+X)
                 p1 = new Vector3(x + 1, y, z + 1); p2 = new Vector3(x + 1, y, z);
                 p3 = new Vector3(x + 1, y + height, z); p4 = new Vector3(x + 1, y + height, z + 1);
+                normal = new Vector3(1, 0, 0);
                 break;
             case 2: // Front (+Z)
                 p1 = new Vector3(x, y, z + 1); p2 = new Vector3(x + 1, y, z + 1);
                 p3 = new Vector3(x + 1, y + height, z + 1); p4 = new Vector3(x, y + height, z + 1);
+                normal = new Vector3(0, 0, 1);
                 break;
             default: // Back (-Z)
                 p1 = new Vector3(x + 1, y, z); p2 = new Vector3(x, y, z);
                 p3 = new Vector3(x, y + height, z); p4 = new Vector3(x + 1, y + height, z);
+                normal = new Vector3(0, 0, -1);
                 break;
         }
 
-        AddVertex(v, p1, finalColor, new Vector2(data.min.X, data.min.Y));
-        AddVertex(v, p2, finalColor, new Vector2(data.max.X, data.min.Y));
-        AddVertex(v, p3, finalColor, new Vector2(data.max.X, data.max.Y));
+        AddVertex(v, p1, data.color, new Vector2(data.min.X, data.min.Y), normal);
+        AddVertex(v, p2, data.color, new Vector2(data.max.X, data.min.Y), normal);
+        AddVertex(v, p3, data.color, new Vector2(data.max.X, data.max.Y), normal);
 
-        AddVertex(v, p1, finalColor, new Vector2(data.min.X, data.min.Y));
-        AddVertex(v, p3, finalColor, new Vector2(data.max.X, data.max.Y));
-        AddVertex(v, p4, finalColor, new Vector2(data.min.X, data.max.Y));
+        AddVertex(v, p1, data.color, new Vector2(data.min.X, data.min.Y), normal);
+        AddVertex(v, p3, data.color, new Vector2(data.max.X, data.max.Y), normal);
+        AddVertex(v, p4, data.color, new Vector2(data.min.X, data.max.Y), normal);
     }
 
     private void AddBottomFace(List<float> v, int x, int y, int z, byte type)
     {
         var data = GetFaceData(type, "bottom", 1, 1);
+        Vector3 normal = new Vector3(0, -1, 0);
 
         // Triangle 1
-        AddVertex(v, new Vector3(x, y, z), data.color, new Vector2(data.min.X, data.min.Y));
-        AddVertex(v, new Vector3(x + 1, y, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
-        AddVertex(v, new Vector3(x, y, z + 1), data.color, new Vector2(data.min.X, data.max.Y));
+        AddVertex(v, new Vector3(x, y, z), data.color, new Vector2(data.min.X, data.min.Y), normal);
+        AddVertex(v, new Vector3(x + 1, y, z + 1), data.color, new Vector2(data.max.X, data.max.Y), normal);
+        AddVertex(v, new Vector3(x, y, z + 1), data.color, new Vector2(data.min.X, data.max.Y), normal);
+
         // Triangle 2
-        AddVertex(v, new Vector3(x, y, z), data.color, new Vector2(data.min.X, data.min.Y));
-        AddVertex(v, new Vector3(x + 1, y, z), data.color, new Vector2(data.max.X, data.min.Y));
-        AddVertex(v, new Vector3(x + 1, y, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
+        AddVertex(v, new Vector3(x, y, z), data.color, new Vector2(data.min.X, data.min.Y), normal);
+        AddVertex(v, new Vector3(x + 1, y, z), data.color, new Vector2(data.max.X, data.min.Y), normal);
+        AddVertex(v, new Vector3(x + 1, y, z + 1), data.color, new Vector2(data.max.X, data.max.Y), normal);
     }
 
     private bool ShouldRenderFace(byte currentType, int nx, int ny, int nz, Chunk? r, Chunk? l, Chunk? f, Chunk? b)
@@ -225,13 +243,19 @@ public class Chunk
         // Default: hide face if neighbor is solid
         return false;
     }
-    
+
     // Inside Chunk.cs
-    private void AddVertex(List<float> v, Vector3 pos, Vector3 color, Vector2 uv)
+    // 1. Update AddVertex to include Normal data
+    private void AddVertex(List<float> v, Vector3 pos, Vector3 color, Vector2 uv, Vector3 normal)
     {
+        // Position (0, 1, 2)
         v.Add(pos.X); v.Add(pos.Y); v.Add(pos.Z);
+        // Color (3, 4, 5)
         v.Add(color.X); v.Add(color.Y); v.Add(color.Z);
+        // UV (6, 7)
         v.Add(uv.X); v.Add(uv.Y);
+        // Normal (8, 9, 10) - New!
+        v.Add(normal.X); v.Add(normal.Y); v.Add(normal.Z);
     }
 
     private (Vector2 min, Vector2 max, Vector3 color) GetFaceData(byte type, string face, int w, int h)
@@ -332,26 +356,27 @@ public class Chunk
     private void AddWaterPlane(List<float> v, int x, int y, int z, float offset, byte type)
     {
         var data = GetFaceData(type, "top", 1, 1);
-        float surfaceY = (y + 1) - offset; // This is the 1/16th drop
+        float surfaceY = (y + 1) - offset;
+
+        Vector3 normalUp = new Vector3(0, 1, 0);
+        Vector3 normalDown = new Vector3(0, -1, 0);
 
         // --- TOP FACE (Visible from sky) ---
-        // Triangle 1
-        AddVertex(v, new Vector3(x, surfaceY, z), data.color, new Vector2(data.min.X, data.min.Y));
-        AddVertex(v, new Vector3(x, surfaceY, z + 1), data.color, new Vector2(data.min.X, data.max.Y));
-        AddVertex(v, new Vector3(x + 1, surfaceY, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
-        // Triangle 2
-        AddVertex(v, new Vector3(x, surfaceY, z), data.color, new Vector2(data.min.X, data.min.Y));
-        AddVertex(v, new Vector3(x + 1, surfaceY, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
-        AddVertex(v, new Vector3(x + 1, surfaceY, z), data.color, new Vector2(data.max.X, data.min.Y));
+        AddVertex(v, new Vector3(x, surfaceY, z), data.color, new Vector2(data.min.X, data.min.Y), normalUp);
+        AddVertex(v, new Vector3(x, surfaceY, z + 1), data.color, new Vector2(data.min.X, data.max.Y), normalUp);
+        AddVertex(v, new Vector3(x + 1, surfaceY, z + 1), data.color, new Vector2(data.max.X, data.max.Y), normalUp);
+
+        AddVertex(v, new Vector3(x, surfaceY, z), data.color, new Vector2(data.min.X, data.min.Y), normalUp);
+        AddVertex(v, new Vector3(x + 1, surfaceY, z + 1), data.color, new Vector2(data.max.X, data.max.Y), normalUp);
+        AddVertex(v, new Vector3(x + 1, surfaceY, z), data.color, new Vector2(data.max.X, data.min.Y), normalUp);
 
         // --- UNDERSIDE FACE (Visible from underwater) ---
-        // Swapped winding so it's visible from below
-        AddVertex(v, new Vector3(x, surfaceY, z), data.color, new Vector2(data.min.X, data.min.Y));
-        AddVertex(v, new Vector3(x + 1, surfaceY, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
-        AddVertex(v, new Vector3(x, surfaceY, z + 1), data.color, new Vector2(data.min.X, data.max.Y));
+        AddVertex(v, new Vector3(x, surfaceY, z), data.color, new Vector2(data.min.X, data.min.Y), normalDown);
+        AddVertex(v, new Vector3(x + 1, surfaceY, z + 1), data.color, new Vector2(data.max.X, data.max.Y), normalDown);
+        AddVertex(v, new Vector3(x, surfaceY, z + 1), data.color, new Vector2(data.min.X, data.max.Y), normalDown);
 
-        AddVertex(v, new Vector3(x, surfaceY, z), data.color, new Vector2(data.min.X, data.min.Y));
-        AddVertex(v, new Vector3(x + 1, surfaceY, z), data.color, new Vector2(data.max.X, data.min.Y));
-        AddVertex(v, new Vector3(x + 1, surfaceY, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
+        AddVertex(v, new Vector3(x, surfaceY, z), data.color, new Vector2(data.min.X, data.min.Y), normalDown);
+        AddVertex(v, new Vector3(x + 1, surfaceY, z), data.color, new Vector2(data.max.X, data.min.Y), normalDown);
+        AddVertex(v, new Vector3(x + 1, surfaceY, z + 1), data.color, new Vector2(data.max.X, data.max.Y), normalDown);
     }
 }

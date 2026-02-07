@@ -8,6 +8,7 @@ using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Processing;
 using SixLabors.ImageSharp.PixelFormats;
 using System.Collections.Concurrent;
+using VoxelEngine_Silk.Net_1._0.Game;
 using VoxelEngine_Silk.Net_1._0.World;
 using System.Diagnostics;
 
@@ -54,6 +55,20 @@ class Program
     // Crosshair
     private static Crosshair _crosshair = null!;
     private static uint _crosshairShader;
+
+    // Time
+    private static TimeManager _timeManager = new TimeManager();
+
+    // Skybox
+    private static Skybox _skybox = null!;
+    private static uint _skyboxShader;
+    private static uint _sunTexture;
+    private static uint _moonTexture;
+    private static uint _starTexture;
+    private static uint _spriteShader;
+    private static QuadMesh _quadMesh = null!;
+
+
     static void Main(string[] args)
     {
         var options = WindowOptions.Default;
@@ -85,6 +100,24 @@ class Program
 
         // 3. Texture and Shaders
         LoadTextureAtlas("terrain.png");
+
+        // Initialize Skybox mesh
+        _skybox = new Skybox(Gl);
+
+        // Read files from root
+
+        // In OnLoad, after initializing OpenGL:
+        _sunTexture = LoadTexture("sun.png");
+        _moonTexture = LoadTexture("moon.png");
+        _starTexture = LoadTexture("stars.png");
+        string vSource = File.ReadAllText("skybox.vert");
+        string fSource = File.ReadAllText("skybox.frag");
+
+        _spriteShader = CreateShaderProgram(File.ReadAllText("sprite.vert"), File.ReadAllText("sprite.frag"));
+        _quadMesh = new QuadMesh(Gl); // A simple class that generates a 2x2 plane (-1 to 1)
+
+        // Compile
+        _skyboxShader = CreateShaderProgram(vSource, fSource);
 
         _selectionBox = new SelectionBox(Gl);
         _selectionShader = CompileSelectionShader();
@@ -279,7 +312,8 @@ class Program
 
     private static unsafe void UploadToVAO(ref uint vao, ref uint vbo, float[] data, out uint vertexCount)
     {
-        vertexCount = (uint)(data.Length / 8); // 3 pos + 3 col + 2 uv = 8 floats per vertex
+        // Updated: 11 floats per vertex (3 pos + 3 col + 2 uv + 3 normal)
+        vertexCount = (uint)(data.Length / 11);
         if (vertexCount == 0) return;
 
         if (vao == 0) vao = Gl.GenVertexArray();
@@ -287,20 +321,30 @@ class Program
 
         Gl.BindVertexArray(vao);
         Gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
+
         fixed (float* d = data)
             Gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), d, BufferUsageARB.StaticDraw);
 
-        // Pos
-        Gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)0);
+        int stride = 11 * sizeof(float);
+
+        // Position (Location 0)
+        Gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, (uint)stride, (void*)0);
         Gl.EnableVertexAttribArray(0);
-        // Color
-        Gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(3 * sizeof(float)));
+
+        // Color (Location 1)
+        Gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, (uint)stride, (void*)(3 * sizeof(float)));
         Gl.EnableVertexAttribArray(1);
-        // UV
-        Gl.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(6 * sizeof(float)));
+
+        // UV (Location 2)
+        Gl.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, (uint)stride, (void*)(6 * sizeof(float)));
         Gl.EnableVertexAttribArray(2);
+
+        // Normal (Location 3) - New!
+        Gl.VertexAttribPointer(3, 3, VertexAttribPointerType.Float, false, (uint)stride, (void*)(8 * sizeof(float)));
+        Gl.EnableVertexAttribArray(3);
     }
 
+    // Used For Blocks
     private static unsafe void LoadTextureAtlas(string path)
     {
         _textureAtlas = Gl.GenTexture();
@@ -330,31 +374,95 @@ class Program
         Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureWrapT, (int)GLEnum.ClampToEdge);
     }
 
+    // Used for Skybox
+    private static unsafe uint LoadTexture(string path)
+    {
+        uint handle = Gl.GenTexture();
+        Gl.BindTexture(GLEnum.Texture2D, handle);
+
+        using (var image = Image.Load<Rgba32>(path))
+        {
+            // OpenGL expects the first pixel to be bottom-left
+            image.Mutate(x => x.Flip(FlipMode.Vertical));
+
+            byte[] pixels = new byte[4 * image.Width * image.Height];
+            image.CopyPixelDataTo(pixels);
+
+            // This ensures OpenGL handles the byte alignment of your pixel data correctly
+            Gl.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
+
+            fixed (byte* ptr = pixels)
+            {
+                Gl.TexImage2D(GLEnum.Texture2D, 0, InternalFormat.Rgba, (uint)image.Width, (uint)image.Height, 0, PixelFormat.Rgba, PixelType.UnsignedByte, ptr);
+            }
+
+            // Generate mipmaps so the shader has data at all "levels"
+            Gl.GenerateMipmap(GLEnum.Texture2D);
+        }
+
+        // Standard Pixel Art Settings
+        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureMinFilter, (int)GLEnum.NearestMipmapLinear); // Use mipmaps but keep pixels sharp
+        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureMagFilter, (int)GLEnum.Nearest);
+        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureWrapS, (int)GLEnum.Repeat);
+        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureWrapT, (int)GLEnum.Repeat);
+
+        return handle;
+    }
+
     private static void OnRender(double deltaTime)
     {
-        Gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
-        Gl.UseProgram(Shader);
+        // 1. Get Simulation Data
+        Vector3 sunDir = _timeManager.SunDirection;
+        Vector3 eyePos = player.GetEyePosition();
 
-        // Bind texture once
+        // 2. Clear Buffers
+        Gl.ClearColor(0, 0, 0, 1.0f);
+        Gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+
+        // 3. Setup Camera Matrices
+        var view = Matrix4x4.CreateLookAt(eyePos, eyePos + player.CameraFront, player.CameraUp);
+        var projection = Matrix4x4.CreatePerspectiveFieldOfView(70f * (float)Math.PI / 180f, (float)window.Size.X / window.Size.Y, 0.1f, 2000.0f);
+        _frustum.Update(view * projection);
+
+        // --- PASS 1: ATMOSPHERE & STARS ---
+        Gl.UseProgram(_skyboxShader);
+        Gl.Disable(GLEnum.CullFace);
+        Gl.Disable(GLEnum.DepthTest);
+
+        Gl.ActiveTexture(GLEnum.Texture3);
+        Gl.BindTexture(GLEnum.Texture2D, _starTexture);
+        Gl.Uniform1(Gl.GetUniformLocation(_skyboxShader, "uStarTex"), 3);
+
+        _skybox.Render(_skyboxShader, view, projection, sunDir);
+
+        // --- PASS 1.5: MINECRAFT SUN/MOON SPRITES ---
+        Gl.Enable(GLEnum.Blend);
+        Gl.BlendFunc(GLEnum.SrcAlpha, GLEnum.OneMinusSrcAlpha);
+        // DepthTest stays off so they draw over the sky background
+        RenderSunMoon(view, projection, sunDir);
+
+        // Re-enable for world
+        Gl.Enable(GLEnum.DepthTest);
+        Gl.Enable(GLEnum.CullFace);
+
+        // --- PASS 2: WORLD SHADER (BLOCKS) ---
+        Gl.UseProgram(Shader);
+        int sunLoc = Gl.GetUniformLocation(Shader, "uSunDir");
+        Gl.Uniform3(sunLoc, sunDir.X, sunDir.Y, sunDir.Z);
+
         Gl.ActiveTexture(GLEnum.Texture0);
         Gl.BindTexture(GLEnum.Texture2D, _textureAtlas);
         Gl.Uniform1(Gl.GetUniformLocation(Shader, "uTexture"), 0);
 
-        // Setup matrices
-        Vector3 eyePos = player.GetEyePosition();
-        var view = Matrix4x4.CreateLookAt(eyePos, eyePos + player.CameraFront, player.CameraUp);
-        var projection = Matrix4x4.CreatePerspectiveFieldOfView(70f * (float)Math.PI / 180f, (float)window.Size.X / window.Size.Y, 0.1f, 2000.0f);
-
-        _frustum.Update(view * projection);
         SetUniformMatrix(Shader, "uView", view);
         SetUniformMatrix(Shader, "uProjection", projection);
 
         RenderChunk[] chunksToDraw;
         lock (_renderChunks) { chunksToDraw = _renderChunks.ToArray(); }
 
-        // --- PASS 1: SOLID GEOMETRY ---
+        // --- SOLID PASS ---
         Gl.Disable(GLEnum.Blend);
-        Gl.DepthMask(true); // Solids MUST write to depth buffer
+        Gl.DepthMask(true);
 
         foreach (var rc in chunksToDraw)
         {
@@ -363,13 +471,12 @@ class Program
 
             SetUniformMatrix(Shader, "uModel", Matrix4x4.CreateTranslation(rc.WorldPosition));
             Gl.BindVertexArray(rc.OpaqueVAO);
-            Gl.DrawArrays(PrimitiveType.Triangles, 0, rc.OpaqueVertexCount);
+            Gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)rc.OpaqueVertexCount);
         }
 
-        // --- PASS 2: WATER GEOMETRY ---
+        // --- WATER PASS ---
         Gl.Enable(GLEnum.Blend);
-        Gl.BlendFunc(GLEnum.SrcAlpha, GLEnum.OneMinusSrcAlpha);
-        Gl.DepthMask(false); // Water should NOT block things behind it in the depth buffer
+        Gl.DepthMask(false);
 
         foreach (var rc in chunksToDraw)
         {
@@ -378,39 +485,24 @@ class Program
 
             SetUniformMatrix(Shader, "uModel", Matrix4x4.CreateTranslation(rc.WorldPosition));
             Gl.BindVertexArray(rc.WaterVAO);
-            Gl.DrawArrays(PrimitiveType.Triangles, 0, rc.WaterVertexCount);
+            Gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)rc.WaterVertexCount);
         }
 
+        // --- SELECTION BOX & UI ---
         var result = Raycaster.Trace(voxelWorld, player.GetEyePosition(), player.CameraFront, 5.0f);
-
         if (result.Hit)
         {
-            Gl.Enable(EnableCap.DepthTest);
-
-            // 1. Enable Polygon Offset
             Gl.Enable(EnableCap.PolygonOffsetLine);
-
-            // 2. Nudge the depth value "closer" to the camera (-1.0f, -1.0f is a safe nudge)
             Gl.PolygonOffset(-1.0f, -1.0f);
-
             _selectionBox.Render(_selectionShader, result.IntPos, view, projection);
-
-            // 3. Clean up so other lines aren't affected
             Gl.Disable(EnableCap.PolygonOffsetLine);
         }
 
-
-        Gl.Disable(EnableCap.DepthTest); // Ensure it's on top of everything
+        Gl.Disable(EnableCap.DepthTest);
         _crosshair.Render(_crosshairShader);
         Gl.Enable(EnableCap.DepthTest);
-        
-        // Reset state for safety
         Gl.DepthMask(true);
-
-
     }
-
-
 
     private static unsafe void SetUniformMatrix(uint shader, string name, Matrix4x4 matrix)
     {
@@ -454,6 +546,8 @@ class Program
                 }
             }
         }
+
+        _timeManager.Update(deltaTime);
 
         int uploadLimit = _uploadQueue.Count > 100 ? 50 : 5;
         for (int i = 0; i < uploadLimit; i++)
@@ -558,5 +652,46 @@ class Program
         Gl.DeleteShader(fragmentShader);
 
         return program;
+    }
+
+
+    private static void RenderSunMoon(Matrix4x4 view, Matrix4x4 projection, Vector3 sunDir)
+    {
+        Gl.UseProgram(_spriteShader);
+        Gl.Disable(GLEnum.CullFace);
+
+        // 1. Calculate the base orbit angle
+        float angle = MathF.Atan2(sunDir.Y, sunDir.X);
+
+        // 2. Create a rotation that points the 'face' of the quad 
+        // directly at the world origin (0,0,0) based on sunDir.
+        // We use CreateLookAt from Zero to the sunDir, which creates
+        // a matrix that 'looks' at the sun. We then invert it to make
+        // the sun 'look' at us.
+        Matrix4x4 sunRotation = Matrix4x4.CreateLookAt(Vector3.Zero, sunDir, Vector3.UnitZ);
+        Matrix4x4.Invert(sunRotation, out sunRotation);
+
+        // --- DRAW SUN ---
+        float sunScale = 25f;
+        Matrix4x4 sunModel = Matrix4x4.CreateScale(sunScale) * sunRotation * Matrix4x4.CreateTranslation(sunDir * 100f);
+
+        SetUniformMatrix(_spriteShader, "uModel", sunModel);
+        SetUniformMatrix(_spriteShader, "uView", view);
+        SetUniformMatrix(_spriteShader, "uProjection", projection);
+
+        Gl.ActiveTexture(GLEnum.Texture0);
+        Gl.BindTexture(GLEnum.Texture2D, _sunTexture);
+        _quadMesh.Render();
+
+        // --- DRAW MOON ---
+        Vector3 moonDir = -sunDir;
+        Matrix4x4 moonRotation = Matrix4x4.CreateLookAt(Vector3.Zero, moonDir, Vector3.UnitZ);
+        Matrix4x4.Invert(moonRotation, out moonRotation);
+
+        Matrix4x4 moonModel = Matrix4x4.CreateScale(20f) * moonRotation * Matrix4x4.CreateTranslation(moonDir * 100f);
+
+        SetUniformMatrix(_spriteShader, "uModel", moonModel);
+        Gl.BindTexture(GLEnum.Texture2D, _moonTexture);
+        _quadMesh.Render();
     }
 }
