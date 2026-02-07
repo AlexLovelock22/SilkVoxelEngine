@@ -46,6 +46,12 @@ class Program
     private static Frustum _frustum = new Frustum();
     private static uint _textureAtlas;
     private static VoxelWorld voxelWorld = new VoxelWorld();
+
+    // Selection Box:
+    private static SelectionBox _selectionBox = null!;
+    private static uint _selectionShader;
+    private static Matrix4x4 _viewMatrix;
+    private static Matrix4x4 _projectionMatrix;
     static void Main(string[] args)
     {
         var options = WindowOptions.Default;
@@ -78,6 +84,9 @@ class Program
         // 3. Texture and Shaders
         LoadTextureAtlas("terrain.png");
 
+        _selectionBox = new SelectionBox(Gl);
+        _selectionShader = CompileSelectionShader();
+
         string vertexCode = File.ReadAllText("shader.vert");
         string fragmentCode = File.ReadAllText("shader.frag");
         uint vs = CompileShader(ShaderType.VertexShader, vertexCode);
@@ -100,6 +109,45 @@ class Program
         LastMousePos = Input.Mice[0].Position;
 
         Console.WriteLine($"[Perf] Engine Initialized in {totalSw.ElapsedMilliseconds}ms. Streaming started.");
+    }
+
+    private static uint CompileSelectionShader()
+    {
+        string vertCode = @"
+        #version 330 core
+        layout (location = 0) in vec3 aPos;
+        uniform mat4 uView;
+        uniform mat4 uProjection;
+        uniform mat4 uModel;
+        void main() {
+            gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
+        }";
+
+        string fragCode = @"
+        #version 330 core
+        out vec4 FragColor;
+        void main() {
+            FragColor = vec4(0.0, 0.0, 0.0, 1.0); // Solid Black
+        }";
+
+        uint vertex = Gl.CreateShader(ShaderType.VertexShader);
+        Gl.ShaderSource(vertex, vertCode);
+        Gl.CompileShader(vertex);
+
+        uint fragment = Gl.CreateShader(ShaderType.FragmentShader);
+        Gl.ShaderSource(fragment, fragCode);
+        Gl.CompileShader(fragment);
+
+        uint program = Gl.CreateProgram();
+        Gl.AttachShader(program, vertex);
+        Gl.AttachShader(program, fragment);
+        Gl.LinkProgram(program);
+
+        // Clean up individual shaders after linking
+        Gl.DeleteShader(vertex);
+        Gl.DeleteShader(fragment);
+
+        return program;
     }
 
     private static void WorldStreamerLoop()
@@ -324,6 +372,24 @@ class Program
             Gl.DrawArrays(PrimitiveType.Triangles, 0, rc.WaterVertexCount);
         }
 
+        var result = Raycaster.Trace(voxelWorld, player.GetEyePosition(), player.CameraFront, 5.0f);
+
+        if (result.Hit)
+        {
+            Gl.Enable(EnableCap.DepthTest);
+
+            // 1. Enable Polygon Offset
+            Gl.Enable(EnableCap.PolygonOffsetLine);
+
+            // 2. Nudge the depth value "closer" to the camera (-1.0f, -1.0f is a safe nudge)
+            Gl.PolygonOffset(-1.0f, -1.0f);
+
+            _selectionBox.Render(_selectionShader, result.IntPos, view, projection);
+
+            // 3. Clean up so other lines aren't affected
+            Gl.Disable(EnableCap.PolygonOffsetLine);
+        }
+
         // Reset state for safety
         Gl.DepthMask(true);
     }
@@ -384,7 +450,7 @@ class Program
 
         player.Update(deltaTime, keyboard, voxelWorld);
         player.HandleInteraction(Input, voxelWorld, (float)deltaTime);
-        
+
         foreach (var chunk in voxelWorld.Chunks.Values)
         {
             if (chunk.IsDirty)

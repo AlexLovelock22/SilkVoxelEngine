@@ -334,17 +334,4 @@ public class Player
 
         return false;
     }
-
-    private bool CanPlaceBlockAt(Vector3 pos)
-    {
-        // Simple AABB check: Is the placement coordinate the same as the player's integer coord?
-        Vector3 playerMin = Position;
-        Vector3 playerMax = Position + new Vector3(0, Height, 0);
-
-        // If the placement block overlaps the player's space, return false
-        // (You can refine this later with Radius)
-        return !(Math.Floor(pos.X) == Math.Floor(Position.X) &&
-                 Math.Floor(pos.Z) == Math.Floor(Position.Z) &&
-                 (Math.Floor(pos.Y) == Math.Floor(Position.Y) || Math.Floor(pos.Y) == Math.Floor(Position.Y + 1)));
-    }
 }
