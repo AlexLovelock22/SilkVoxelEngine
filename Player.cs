@@ -309,11 +309,30 @@ public class Player
     // Helper to prevent placing blocks in your own head/feet
     private bool IsPositionInsidePlayer(Vector3 blockPos)
     {
-        Vector3 p = new Vector3(MathF.Floor(Position.X), MathF.Floor(Position.Y), MathF.Floor(Position.Z));
-        Vector3 b = new Vector3(MathF.Floor(blockPos.X), MathF.Floor(blockPos.Y), MathF.Floor(blockPos.Z));
+        // The integer coordinate of the block you're trying to place
+        int bx = (int)MathF.Floor(blockPos.X);
+        int by = (int)MathF.Floor(blockPos.Y);
+        int bz = (int)MathF.Floor(blockPos.Z);
 
-        // Check foot level and head level
-        return b == p || b == (p + Vector3.UnitY);
+        // The range of integer coordinates the player currently occupies
+        int playerX = (int)MathF.Floor(Position.X);
+        int playerZ = (int)MathF.Floor(Position.Z);
+
+        // Player feet and head integer Y levels
+        int footY = (int)MathF.Floor(Position.Y);
+        int headY = (int)MathF.Floor(Position.Y + Height - 0.01f); // Subtracting a tiny bit to avoid ceiling edge cases
+
+        // 1. Check if X and Z match (the player is a vertical column)
+        if (bx == playerX && bz == playerZ)
+        {
+            // 2. Check if the block's Y is anywhere between the feet and head
+            if (by >= footY && by <= headY)
+            {
+                return true; // Block is inside the player's vertical space
+            }
+        }
+
+        return false;
     }
 
     private bool CanPlaceBlockAt(Vector3 pos)
