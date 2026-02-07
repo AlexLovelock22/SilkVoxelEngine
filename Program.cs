@@ -50,8 +50,10 @@ class Program
     // Selection Box:
     private static SelectionBox _selectionBox = null!;
     private static uint _selectionShader;
-    private static Matrix4x4 _viewMatrix;
-    private static Matrix4x4 _projectionMatrix;
+
+    // Crosshair
+    private static Crosshair _crosshair = null!;
+    private static uint _crosshairShader;
     static void Main(string[] args)
     {
         var options = WindowOptions.Default;
@@ -87,6 +89,9 @@ class Program
         _selectionBox = new SelectionBox(Gl);
         _selectionShader = CompileSelectionShader();
 
+        _crosshair = new Crosshair(Gl);
+        _crosshairShader = CompileCrosshairShader();
+
         string vertexCode = File.ReadAllText("shader.vert");
         string fragmentCode = File.ReadAllText("shader.frag");
         uint vs = CompileShader(ShaderType.VertexShader, vertexCode);
@@ -107,6 +112,10 @@ class Program
         foreach (var mouse in Input.Mice) mouse.Cursor.CursorMode = CursorMode.Raw;
         Input.Mice[0].MouseMove += OnMouseMove;
         LastMousePos = Input.Mice[0].Position;
+
+        Gl.Disable(EnableCap.DepthTest); // Ensure it draws over the world
+        _crosshair.Render(_crosshairShader);
+        Gl.Enable(EnableCap.DepthTest);
 
         Console.WriteLine($"[Perf] Engine Initialized in {totalSw.ElapsedMilliseconds}ms. Streaming started.");
     }
@@ -390,8 +399,15 @@ class Program
             Gl.Disable(EnableCap.PolygonOffsetLine);
         }
 
+
+        Gl.Disable(EnableCap.DepthTest); // Ensure it's on top of everything
+        _crosshair.Render(_crosshairShader);
+        Gl.Enable(EnableCap.DepthTest);
+        
         // Reset state for safety
         Gl.DepthMask(true);
+
+
     }
 
 
@@ -486,5 +502,61 @@ class Program
         LastMousePos = position;
 
         player.Rotate(mouseOffset);
+    }
+
+    private static uint CompileCrosshairShader()
+    {
+        string vertCode = @"
+    #version 330 core
+    layout (location = 0) in vec2 aPos;
+    void main() {
+        gl_Position = vec4(aPos, 0.0, 1.0);
+    }";
+
+        string fragCode = @"
+    #version 330 core
+    out vec4 FragColor;
+    void main() {
+        FragColor = vec4(1.0, 1.0, 1.0, 0.8); 
+    }";
+
+        return CreateShaderProgram(vertCode, fragCode);
+    }
+
+    private static uint CreateShaderProgram(string vertexSource, string fragmentSource)
+    {
+        uint vertexShader = Gl.CreateShader(ShaderType.VertexShader);
+        Gl.ShaderSource(vertexShader, vertexSource);
+        Gl.CompileShader(vertexShader);
+
+        // Check for compilation errors
+        string infoLog = Gl.GetShaderInfoLog(vertexShader);
+        if (!string.IsNullOrWhiteSpace(infoLog))
+            Console.WriteLine($"Vertex Shader Error: {infoLog}");
+
+        uint fragmentShader = Gl.CreateShader(ShaderType.FragmentShader);
+        Gl.ShaderSource(fragmentShader, fragmentSource);
+        Gl.CompileShader(fragmentShader);
+
+        // Check for compilation errors
+        infoLog = Gl.GetShaderInfoLog(fragmentShader);
+        if (!string.IsNullOrWhiteSpace(infoLog))
+            Console.WriteLine($"Fragment Shader Error: {infoLog}");
+
+        uint program = Gl.CreateProgram();
+        Gl.AttachShader(program, vertexShader);
+        Gl.AttachShader(program, fragmentShader);
+        Gl.LinkProgram(program);
+
+        // Check for linking errors
+        Gl.GetProgram(program, ProgramPropertyARB.LinkStatus, out int status);
+        if (status == 0)
+            Console.WriteLine($"Shader Link Error: {Gl.GetProgramInfoLog(program)}");
+
+        // Clean up
+        Gl.DeleteShader(vertexShader);
+        Gl.DeleteShader(fragmentShader);
+
+        return program;
     }
 }

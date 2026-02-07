@@ -6,50 +6,89 @@ namespace VoxelEngine_Silk.Net_1._0;
 public struct RaycastResult
 {
     public bool Hit;
-    public Vector3 IntPos;   // The coordinate of the block we hit (Break target)
-    public Vector3 PlacePos; // The coordinate of the face neighbor (Place target)
+    public Vector3 IntPos;   // The block we are looking at
+    public Vector3 PlacePos; // The empty space for placement
 }
 
 public static class Raycaster
 {
-    /// <summary>
-    /// Traces a ray from origin in a direction to find the first non-transparent block.
-    /// </summary>
     public static RaycastResult Trace(VoxelWorld world, Vector3 origin, Vector3 direction, float maxDistance)
     {
-        // We step in small increments to ensure we don't skip over corners
-        float step = 0.05f; 
-        Vector3 currentPos = origin;
-        Vector3 lastPos = origin;
+        // 1. Determine direction of movement (sign) and current integer block
+        int x = (int)MathF.Floor(origin.X);
+        int y = (int)MathF.Floor(origin.Y);
+        int z = (int)MathF.Floor(origin.Z);
 
-        for (float distance = 0; distance < maxDistance; distance += step)
+        int stepX = direction.X > 0 ? 1 : -1;
+        int stepY = direction.Y > 0 ? 1 : -1;
+        int stepZ = direction.Z > 0 ? 1 : -1;
+
+        // 2. Calculate distance to the next grid boundary
+        // We use MathF.Max to avoid division by zero
+        Vector3 tMax = new Vector3(
+            (stepX > 0 ? (x + 1) - origin.X : origin.X - x) / MathF.Max(MathF.Abs(direction.X), 0.0001f),
+            (stepY > 0 ? (y + 1) - origin.Y : origin.Y - y) / MathF.Max(MathF.Abs(direction.Y), 0.0001f),
+            (stepZ > 0 ? (z + 1) - origin.Z : origin.Z - z) / MathF.Max(MathF.Abs(direction.Z), 0.0001f)
+        );
+
+        // 3. How far we travel along the ray to cross exactly one voxel width
+        Vector3 tDelta = new Vector3(
+            1.0f / MathF.Max(MathF.Abs(direction.X), 0.0001f),
+            1.0f / MathF.Max(MathF.Abs(direction.Y), 0.0001f),
+            1.0f / MathF.Max(MathF.Abs(direction.Z), 0.0001f)
+        );
+
+        Vector3 lastPos = new Vector3(x, y, z);
+        float totalDist = 0;
+
+        // 4. Traversal Loop
+        while (totalDist < maxDistance)
         {
-            currentPos = origin + (direction * distance);
+            byte block = world.GetBlock(x, y, z);
 
-            int x = (int)MathF.Floor(currentPos.X);
-            int y = (int)MathF.Floor(currentPos.Y);
-            int bz = (int)MathF.Floor(currentPos.Z);
-
-            byte block = world.GetBlock(x, y, bz);
-
-            // Using your BlockRegistry to determine what is "solid" vs "interactable"
-            // We ignore Air (0) and Water (5) so we can click through water to the riverbed
             if (!BlockRegistry.IsTransparent(block))
             {
                 return new RaycastResult
                 {
                     Hit = true,
-                    IntPos = new Vector3(x, y, bz),
-                    // The placement position is the last air/water block we were in before hitting the solid
-                    PlacePos = new Vector3(
-                        (int)MathF.Floor(lastPos.X),
-                        (int)MathF.Floor(lastPos.Y),
-                        (int)MathF.Floor(lastPos.Z)
-                    )
+                    IntPos = new Vector3(x, y, z),
+                    PlacePos = lastPos // The voxel we were in BEFORE hitting this one
                 };
             }
 
-            lastPos = currentPos;
+            lastPos = new Vector3(x, y, z);
+
+            // Move to the next closest grid boundary
+            if (tMax.X < tMax.Y)
+            {
+                if (tMax.X < tMax.Z)
+                {
+                    totalDist = tMax.X;
+                    tMax.X += tDelta.X;
+                    x += stepX;
+                }
+                else
+                {
+                    totalDist = tMax.Z;
+                    tMax.Z += tDelta.Z;
+                    z += stepZ;
+                }
+            }
+            else
+            {
+                if (tMax.Y < tMax.Z)
+                {
+                    totalDist = tMax.Y;
+                    tMax.Y += tDelta.Y;
+                    y += stepY;
+                }
+                else
+                {
+                    totalDist = tMax.Z;
+                    tMax.Z += tDelta.Z;
+                    z += stepZ;
+                }
+            }
         }
 
         return new RaycastResult { Hit = false };

@@ -29,7 +29,7 @@ public class Player
     private const float WALK_SPEED = 10.0f;
 
     private float _interactionCooldown = 0f;
-    private const float COOLDOWN_TIME = 0.1f;
+    private const float COOLDOWN_TIME = 0.2f;
 
     public Player(Vector3 startPosition)
     {
@@ -309,29 +309,29 @@ public class Player
     // Helper to prevent placing blocks in your own head/feet
     private bool IsPositionInsidePlayer(Vector3 blockPos)
     {
-        // The integer coordinate of the block you're trying to place
-        int bx = (int)MathF.Floor(blockPos.X);
-        int by = (int)MathF.Floor(blockPos.Y);
-        int bz = (int)MathF.Floor(blockPos.Z);
+        // 1. Get the boundaries of the block being placed (1x1x1 cube)
+        float blockMinX = MathF.Floor(blockPos.X);
+        float blockMaxX = blockMinX + 1.0f;
+        float blockMinY = MathF.Floor(blockPos.Y);
+        float blockMaxY = blockMinY + 1.0f;
+        float blockMinZ = MathF.Floor(blockPos.Z);
+        float blockMaxZ = blockMinZ + 1.0f;
 
-        // The range of integer coordinates the player currently occupies
-        int playerX = (int)MathF.Floor(Position.X);
-        int playerZ = (int)MathF.Floor(Position.Z);
+        // 2. Get the player's physical boundaries based on Radius and Height
+        // We add a tiny 'skin width' (0.01) to make the check slightly more forgiving
+        float playerMinX = Position.X - Radius + 0.01f;
+        float playerMaxX = Position.X + Radius - 0.01f;
+        float playerMinY = Position.Y + 0.01f;
+        float playerMaxY = Position.Y + Height - 0.01f;
+        float playerMinZ = Position.Z - Radius + 0.01f;
+        float playerMaxZ = Position.Z + Radius - 0.01f;
 
-        // Player feet and head integer Y levels
-        int footY = (int)MathF.Floor(Position.Y);
-        int headY = (int)MathF.Floor(Position.Y + Height - 0.01f); // Subtracting a tiny bit to avoid ceiling edge cases
+        // 3. Check for overlap on all three axes
+        bool xOverlap = playerMinX < blockMaxX && playerMaxX > blockMinX;
+        bool yOverlap = playerMinY < blockMaxY && playerMaxY > blockMinY;
+        bool zOverlap = playerMinZ < blockMaxZ && playerMaxZ > blockMinZ;
 
-        // 1. Check if X and Z match (the player is a vertical column)
-        if (bx == playerX && bz == playerZ)
-        {
-            // 2. Check if the block's Y is anywhere between the feet and head
-            if (by >= footY && by <= headY)
-            {
-                return true; // Block is inside the player's vertical space
-            }
-        }
-
-        return false;
+        // If they overlap on ALL axes, the player is inside the block space
+        return xOverlap && yOverlap && zOverlap;
     }
 }
