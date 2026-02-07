@@ -64,7 +64,6 @@ class Program
     private static uint _skyboxShader;
     private static uint _sunTexture;
     private static uint _moonTexture;
-    private static uint _starTexture;
     private static uint _spriteShader;
     private static QuadMesh _quadMesh = null!;
 
@@ -72,18 +71,24 @@ class Program
     static void Main(string[] args)
     {
         var options = WindowOptions.Default;
+        options.WindowState = WindowState.Maximized;
+        options.WindowBorder = WindowBorder.Resizable;
         options.Size = new Vector2D<int>(1920, 1080);
         options.Title = "Voxel Engine - Multi-Chunk View";
-
         options.VSync = true;
 
         window = Window.Create(options);
+
         window.Load += OnLoad;
         window.Update += OnUpdate;
         window.Render += OnRender;
-        window.Run();
 
+        // Use the helper for resizing
+        window.FramebufferResize += UpdateViewport;
+
+        window.Run();
     }
+
     private static unsafe void OnLoad()
     {
         Gl = GL.GetApi(window);
@@ -99,25 +104,20 @@ class Program
         Gl.ClearColor(0.4f, 0.6f, 0.9f, 1.0f);
 
         // 3. Texture and Shaders
-        LoadTextureAtlas("terrain.png");
+        LoadTextureAtlas(Path.Combine("Textures", "terrain.png"));
 
         // Initialize Skybox mesh
         _skybox = new Skybox(Gl);
 
-        // Read files from root
+        _sunTexture = LoadTexture(Path.Combine("Textures", "sun.png")); //
+        _moonTexture = LoadTexture(Path.Combine("Textures", "moon.png")); //
 
-        // In OnLoad, after initializing OpenGL:
-        _sunTexture = LoadTexture("sun.png");
-        _moonTexture = LoadTexture("moon.png");
-        _starTexture = LoadTexture("stars.png");
-        string vSource = File.ReadAllText("skybox.vert");
-        string fSource = File.ReadAllText("skybox.frag");
+        string vSource = Path.Combine("Shaders", "skybox.vert");
+        string fSource = Path.Combine("Shaders", "skybox.frag");
 
-        _spriteShader = CreateShaderProgram(File.ReadAllText("sprite.vert"), File.ReadAllText("sprite.frag"));
-        _quadMesh = new QuadMesh(Gl); // A simple class that generates a 2x2 plane (-1 to 1)
-
-        // Compile
-        _skyboxShader = CreateShaderProgram(vSource, fSource);
+        _quadMesh = new QuadMesh(Gl);
+        _spriteShader = CreateShaderProgram(Path.Combine("Shaders", "sprite.vert"), Path.Combine("Shaders", "sprite.frag"));
+        _skyboxShader = CreateShaderProgramFromFile(vSource, fSource);
 
         _selectionBox = new SelectionBox(Gl);
         _selectionShader = CompileSelectionShader();
@@ -125,17 +125,9 @@ class Program
         _crosshair = new Crosshair(Gl);
         _crosshairShader = CompileCrosshairShader();
 
-        string vertexCode = File.ReadAllText("shader.vert");
-        string fragmentCode = File.ReadAllText("shader.frag");
-        uint vs = CompileShader(ShaderType.VertexShader, vertexCode);
-        uint fs = CompileShader(ShaderType.FragmentShader, fragmentCode);
-
-        Shader = Gl.CreateProgram();
-        Gl.AttachShader(Shader, vs);
-        Gl.AttachShader(Shader, fs);
-        Gl.LinkProgram(Shader);
-        Gl.DeleteShader(vs);
-        Gl.DeleteShader(fs);
+        string vertexCode = Path.Combine("Shaders", "shader.vert");
+        string fragmentCode = Path.Combine("Shaders", "shader.frag");
+        Shader = CreateShaderProgramFromFile(vertexCode, fragmentCode);
 
         // 4. Input and Background Tasks
         Stopwatch totalSw = Stopwatch.StartNew();
@@ -149,7 +141,8 @@ class Program
         Gl.Disable(EnableCap.DepthTest); // Ensure it draws over the world
         _crosshair.Render(_crosshairShader);
         Gl.Enable(EnableCap.DepthTest);
-
+        UpdateViewport(window.FramebufferSize);
+        
         Console.WriteLine($"[Perf] Engine Initialized in {totalSw.ElapsedMilliseconds}ms. Streaming started.");
     }
 
@@ -189,7 +182,7 @@ class Program
         Gl.DeleteShader(vertex);
         Gl.DeleteShader(fragment);
 
-        return program;
+        return CreateShaderProgramFromSource(vertCode, fragCode);
     }
 
     private static void WorldStreamerLoop()
@@ -419,8 +412,8 @@ class Program
         Gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
         var view = Matrix4x4.CreateLookAt(eyePos, eyePos + player.CameraFront, player.CameraUp);
-        var projection = Matrix4x4.CreatePerspectiveFieldOfView(70f * (float)Math.PI / 180f, (float)window.Size.X / window.Size.Y, 0.1f, 2000.0f);
-        _frustum.Update(view * projection);
+        float aspect = (float)window.Size.X / (float)window.Size.Y;
+        var projection = Matrix4x4.CreatePerspectiveFieldOfView(70f * (float)Math.PI / 180f, aspect, 0.1f, 2000.0f); _frustum.Update(view * projection);
 
         // --- PASS 1: SKYBOX ---
         Gl.UseProgram(_skyboxShader);
@@ -612,46 +605,83 @@ class Program
         FragColor = vec4(1.0, 1.0, 1.0, 0.8); 
     }";
 
-        return CreateShaderProgram(vertCode, fragCode);
+        return CreateShaderProgramFromSource(vertCode, fragCode);
     }
 
-    private static uint CreateShaderProgram(string vertexSource, string fragmentSource)
+    private static uint CreateShaderProgram(string vertexPath, string fragmentPath)
     {
+        // Read the actual text inside the files
+        string vertexSource = File.ReadAllText(vertexPath);
+        string fragmentSource = File.ReadAllText(fragmentPath);
+
         uint vertexShader = Gl.CreateShader(ShaderType.VertexShader);
         Gl.ShaderSource(vertexShader, vertexSource);
         Gl.CompileShader(vertexShader);
-
-        // Check for compilation errors
-        string infoLog = Gl.GetShaderInfoLog(vertexShader);
-        if (!string.IsNullOrWhiteSpace(infoLog))
-            Console.WriteLine($"Vertex Shader Error: {infoLog}");
+        CheckShaderError(vertexShader, "Vertex", vertexPath);
 
         uint fragmentShader = Gl.CreateShader(ShaderType.FragmentShader);
         Gl.ShaderSource(fragmentShader, fragmentSource);
         Gl.CompileShader(fragmentShader);
-
-        // Check for compilation errors
-        infoLog = Gl.GetShaderInfoLog(fragmentShader);
-        if (!string.IsNullOrWhiteSpace(infoLog))
-            Console.WriteLine($"Fragment Shader Error: {infoLog}");
+        CheckShaderError(fragmentShader, "Fragment", fragmentPath);
 
         uint program = Gl.CreateProgram();
         Gl.AttachShader(program, vertexShader);
         Gl.AttachShader(program, fragmentShader);
         Gl.LinkProgram(program);
 
-        // Check for linking errors
         Gl.GetProgram(program, ProgramPropertyARB.LinkStatus, out int status);
         if (status == 0)
-            Console.WriteLine($"Shader Link Error: {Gl.GetProgramInfoLog(program)}");
+            Console.WriteLine($"Link Error: {Gl.GetProgramInfoLog(program)}");
 
-        // Clean up
+        Gl.DeleteShader(vertexShader);
+        Gl.DeleteShader(fragmentShader);
+        return program;
+    }
+
+    private static void CheckShaderError(uint shader, string type, string path)
+    {
+        string infoLog = Gl.GetShaderInfoLog(shader);
+        if (!string.IsNullOrWhiteSpace(infoLog))
+            Console.WriteLine($"{type} Shader Error in {path}: {infoLog}");
+    }
+
+
+    // Use this for shaders that exist as files (Skybox, Terrain)
+    private static uint CreateShaderProgramFromFile(string vertexPath, string fragmentPath)
+    {
+        string vertexSource = File.ReadAllText(vertexPath);
+        string fragmentSource = File.ReadAllText(fragmentPath);
+        return CreateShaderProgramFromSource(vertexSource, fragmentSource);
+    }
+
+    // Use this for shaders defined as strings in C# (Crosshair, SelectionBox)
+    private static uint CreateShaderProgramFromSource(string vertexSource, string fragmentSource)
+    {
+        uint vertexShader = Gl.CreateShader(ShaderType.VertexShader);
+        Gl.ShaderSource(vertexShader, vertexSource);
+        Gl.CompileShader(vertexShader);
+
+        // Check for errors
+        string vLog = Gl.GetShaderInfoLog(vertexShader);
+        if (!string.IsNullOrWhiteSpace(vLog)) Console.WriteLine($"Vertex Error: {vLog}");
+
+        uint fragmentShader = Gl.CreateShader(ShaderType.FragmentShader);
+        Gl.ShaderSource(fragmentShader, fragmentSource);
+        Gl.CompileShader(fragmentShader);
+
+        string fLog = Gl.GetShaderInfoLog(fragmentShader);
+        if (!string.IsNullOrWhiteSpace(fLog)) Console.WriteLine($"Fragment Error: {fLog}");
+
+        uint program = Gl.CreateProgram();
+        Gl.AttachShader(program, vertexShader);
+        Gl.AttachShader(program, fragmentShader);
+        Gl.LinkProgram(program);
+
         Gl.DeleteShader(vertexShader);
         Gl.DeleteShader(fragmentShader);
 
         return program;
     }
-
 
     private static void RenderSunMoon(Matrix4x4 view, Matrix4x4 projection, Vector3 sunDir)
     {
@@ -691,5 +721,10 @@ class Program
         SetUniformMatrix(_spriteShader, "uModel", moonModel);
         Gl.BindTexture(GLEnum.Texture2D, _moonTexture);
         _quadMesh.Render();
+    }
+
+    private static void UpdateViewport(Vector2D<int> size)
+    {
+        Gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
     }
 }

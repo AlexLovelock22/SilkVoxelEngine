@@ -1,5 +1,3 @@
-C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\shader.frag
-C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\shader.vert
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\VoxelEngine-Silk.Net-1.0.exe
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\VoxelEngine-Silk.Net-1.0.deps.json
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\VoxelEngine-Silk.Net-1.0.runtimeconfig.json
@@ -36,3 +34,11 @@ C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEngine-Silk.Net-1.
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\VoxelEngine-Silk.Net-1.0.genruntimeconfig.cache
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\obj\Debug\net9.0\ref\VoxelEngine-Silk.Net-1.0.dll
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\SixLabors.ImageSharp.dll
+C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\Shaders\selection.frag
+C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\Shaders\selection.vert
+C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\Shaders\shader.frag
+C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\Shaders\shader.vert
+C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\Shaders\skybox.frag
+C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\Shaders\skybox.vert
+C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\Shaders\sprite.frag
+C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\Shaders\sprite.vert
