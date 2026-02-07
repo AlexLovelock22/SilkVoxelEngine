@@ -26,8 +26,10 @@ public class Player
 
     private const float GRAVITY = -25f;
     private const float JUMP_FORCE = 8.5f;
-    private const float WALK_SPEED = 5.0f;
-    private const float SKIN_WIDTH = 0.01f;
+    private const float WALK_SPEED = 10.0f;
+
+    private float _interactionCooldown = 0f;
+    private const float COOLDOWN_TIME = 0.1f;
 
     public Player(Vector3 startPosition)
     {
@@ -83,14 +85,15 @@ public class Player
 
         // 2. Detect Environment
         Vector3 eyePos = GetEyePosition();
-        bool inWater = world.GetBlock((int)Math.Floor(Position.X), (int)Math.Floor(Position.Y), (int)Math.Floor(Position.Z)) == 2 ||
-                       world.GetBlock((int)Math.Floor(eyePos.X), (int)Math.Floor(eyePos.Y), (int)Math.Floor(eyePos.Z)) == 2;
+        // Check if feet or head are in water (Block ID 2)
+        bool inWater = world.GetBlock((int)Math.Floor(Position.X), (int)Math.Floor(Position.Y), (int)Math.Floor(Position.Z)) == (byte)BlockType.Water ||
+                     world.GetBlock((int)Math.Floor(eyePos.X), (int)Math.Floor(eyePos.Y), (int)Math.Floor(eyePos.Z)) == (byte)BlockType.Water;
 
         UpdateCameraVectors();
         Vector3 moveDir = GetInputDirection(keyboard);
 
         float currentMaxSpeed = IsFlying ? 20.0f : (WALK_SPEED * 1.6f);
-        float swimSpeed = WALK_SPEED * 0.7f;
+        float swimSpeed = WALK_SPEED * 0.85f; // Slightly increased swim speed as requested
 
         // 3. Apply Vertical Physics
         if (IsFlying)
@@ -104,7 +107,17 @@ public class Player
         {
             IsGrounded = false;
             Velocity.Y -= Velocity.Y * 3.0f * dt; // Water Drag
-            Velocity.Y -= 4.0f * dt;             // Sinking force
+
+            // JITTER FIX: Only sink if we aren't already touching the floor
+            bool touchingFloor = CheckCollision(Position + new Vector3(0, -0.1f, 0), world);
+            if (!touchingFloor)
+            {
+                Velocity.Y -= 4.0f * dt; // Constant sinking force
+            }
+            else if (Velocity.Y < 0)
+            {
+                Velocity.Y = 0; // Stop downward momentum at sea floor
+            }
 
             if (keyboard.IsKeyPressed(Key.Space)) Velocity.Y += (swimSpeed * 8.0f) * dt;
             if (keyboard.IsKeyPressed(Key.ShiftLeft)) Velocity.Y -= (swimSpeed * 5.0f) * dt;
@@ -126,7 +139,7 @@ public class Player
             }
         }
 
-        // 4. Horizontal Velocity with Tuned Inertia
+        // 4. Horizontal Velocity (Inertia & Speed Cap)
         if (IsFlying)
         {
             Velocity.X = moveDir.X * currentMaxSpeed;
@@ -134,31 +147,26 @@ public class Player
         }
         else
         {
-            // --- TUNED PHYSICS CONSTANTS ---
-            float groundDrag = 12.0f;  // Higher = stops faster on ground
-            float airDrag = 1.0f;     // Lower = carries momentum in air
+            float groundDrag = 12.0f;
+            float airDrag = 1.0f;
             float currentDrag = IsGrounded ? groundDrag : airDrag;
+            float accelPower = IsGrounded ? 9.0f : 1.5f; // Snappy on ground, limited in air
 
-            // Acceleration power (8.0f on ground feels heavy but responsive)
-            float accelPower = IsGrounded ? 8.0f : 1.2f;
-
-            // 1. Apply Drag (Friction)
+            // Apply Friction
             Velocity.X -= Velocity.X * currentDrag * dt;
             Velocity.Z -= Velocity.Z * currentDrag * dt;
 
-            // 2. Add movement thrust
+            // Apply Movement
             if (moveDir.Length() > 0)
             {
                 float targetSpeed = inWater ? swimSpeed : currentMaxSpeed;
                 Velocity.X += moveDir.X * (targetSpeed * accelPower) * dt;
                 Velocity.Z += moveDir.Z * (targetSpeed * accelPower) * dt;
 
-                // Apply camera-look swimming if in water
                 if (inWater) Velocity.Y += moveDir.Y * (targetSpeed * accelPower) * dt;
             }
 
-            // 3. Speed Governor (Hard Cap)
-            // Prevents acceleration math from making the player "super-sonic"
+            // Speed Governor
             float horizontalSpeed = MathF.Sqrt(Velocity.X * Velocity.X + Velocity.Z * Velocity.Z);
             if (horizontalSpeed > currentMaxSpeed && !inWater)
             {
@@ -173,10 +181,8 @@ public class Player
         if (moveX != 0)
         {
             Vector3 nextX = Position + new Vector3(moveX, 0, 0);
-            if (!CheckCollision(nextX, world))
-                Position.X = nextX.X;
-            else
-                Velocity.X = 0;
+            if (!CheckCollision(nextX, world)) Position.X = nextX.X;
+            else Velocity.X = 0;
         }
 
         // Z Axis
@@ -184,10 +190,8 @@ public class Player
         if (moveZ != 0)
         {
             Vector3 nextZ = Position + new Vector3(0, 0, moveZ);
-            if (!CheckCollision(nextZ, world))
-                Position.Z = nextZ.Z;
-            else
-                Velocity.Z = 0;
+            if (!CheckCollision(nextZ, world)) Position.Z = nextZ.Z;
+            else Velocity.Z = 0;
         }
 
         // Y Axis
@@ -198,9 +202,10 @@ public class Player
 
             if (CheckCollision(nextY, world))
             {
-                if (Velocity.Y < 0) // Landing
+                if (Velocity.Y < 0) // Falling or Sinking
                 {
-                    Position.Y = MathF.Floor(nextY.Y + 0.05f) + 1.0f;
+                    // LANDING FIX: Precise snap to the top of the block with a 0.001f buffer
+                    Position.Y = MathF.Ceiling(nextY.Y - 0.5f) + 0.001f;
                     IsGrounded = true;
                 }
                 Velocity.Y = 0;
@@ -208,8 +213,8 @@ public class Player
             else
             {
                 Position.Y = nextY.Y;
-                // Constant check to see if we've walked off an edge
-                IsGrounded = CheckCollision(Position + new Vector3(0, -0.01f, 0), world);
+                // Grounding check for walking off ledges
+                IsGrounded = CheckCollision(Position + new Vector3(0, -0.05f, 0), world);
             }
         }
     }
@@ -233,8 +238,11 @@ public class Player
 
                     byte block = world.GetBlock(bx, by, bz);
 
-                    // Ignore Air (0) and Water (2) for physical movement collision
-                    if (block != 0 && block != 2) return true;
+                    // If the block is NOT transparent (not Air or Water), it is a solid obstacle.
+                    if (!BlockRegistry.IsTransparent(block))
+                    {
+                        return true;
+                    }
                 }
             }
         }
@@ -253,5 +261,71 @@ public class Player
         if (keyboard.IsKeyPressed(Key.D)) move += right;
 
         return move != Vector3.Zero ? Vector3.Normalize(move) : Vector3.Zero;
+    }
+
+
+    // Inside Player.cs
+    public void HandleInteraction(IInputContext input, VoxelWorld world, float deltaTime)
+    {
+        // 1. Decrease the timer by the time passed since last frame
+        if (_interactionCooldown > 0)
+        {
+            _interactionCooldown -= deltaTime;
+            return; // Still cooling down, don't do anything
+        }
+
+        var mouse = input.Mice[0];
+        float reachDistance = 5.0f;
+
+        // Check for clicks
+        bool leftClick = mouse.IsButtonPressed(MouseButton.Left);
+        bool rightClick = mouse.IsButtonPressed(MouseButton.Right);
+
+        if (leftClick || rightClick)
+        {
+            var result = Raycaster.Trace(world, GetEyePosition(), CameraFront, reachDistance);
+
+            if (result.Hit)
+            {
+                if (leftClick) // BREAK
+                {
+                    world.SetBlock((int)result.IntPos.X, (int)result.IntPos.Y, (int)result.IntPos.Z, (byte)BlockType.Air);
+                }
+                else if (rightClick) // PLACE
+                {
+                    // Simple collision check to avoid placing blocks inside yourself
+                    if (!IsPositionInsidePlayer(result.PlacePos))
+                    {
+                        world.SetBlock((int)result.PlacePos.X, (int)result.PlacePos.Y, (int)result.PlacePos.Z, (byte)BlockType.Dirt);
+                    }
+                }
+
+                // 2. Reset the timer after a successful action
+                _interactionCooldown = COOLDOWN_TIME;
+            }
+        }
+    }
+
+    // Helper to prevent placing blocks in your own head/feet
+    private bool IsPositionInsidePlayer(Vector3 blockPos)
+    {
+        Vector3 p = new Vector3(MathF.Floor(Position.X), MathF.Floor(Position.Y), MathF.Floor(Position.Z));
+        Vector3 b = new Vector3(MathF.Floor(blockPos.X), MathF.Floor(blockPos.Y), MathF.Floor(blockPos.Z));
+
+        // Check foot level and head level
+        return b == p || b == (p + Vector3.UnitY);
+    }
+
+    private bool CanPlaceBlockAt(Vector3 pos)
+    {
+        // Simple AABB check: Is the placement coordinate the same as the player's integer coord?
+        Vector3 playerMin = Position;
+        Vector3 playerMax = Position + new Vector3(0, Height, 0);
+
+        // If the placement block overlaps the player's space, return false
+        // (You can refine this later with Radius)
+        return !(Math.Floor(pos.X) == Math.Floor(Position.X) &&
+                 Math.Floor(pos.Z) == Math.Floor(Position.Z) &&
+                 (Math.Floor(pos.Y) == Math.Floor(Position.Y) || Math.Floor(pos.Y) == Math.Floor(Position.Y + 1)));
     }
 }

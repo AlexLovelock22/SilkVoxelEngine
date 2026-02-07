@@ -383,6 +383,23 @@ class Program
         }
 
         player.Update(deltaTime, keyboard, voxelWorld);
+        player.HandleInteraction(Input, voxelWorld, (float)deltaTime);
+        
+        foreach (var chunk in voxelWorld.Chunks.Values)
+        {
+            if (chunk.IsDirty)
+            {
+                chunk.IsDirty = false; // Reset the flag so we don't queue it 1000 times
+
+                // Push the chunk back into your generation thread
+                Task.Run(() =>
+                {
+                    var meshData = chunk.FillVertexData();
+                    // This 'uploadQueue' is what your Program.cs uses to call FinalizeGPUUpload
+                    _uploadQueue.Enqueue((chunk, meshData));
+                });
+            }
+        }
 
         _timePassed += deltaTime;
         _frameCount++;

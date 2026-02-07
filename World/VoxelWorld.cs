@@ -11,6 +11,7 @@ public class VoxelWorld
     public FastNoiseLite TempNoise = new();
     public FastNoiseLite HumidityNoise = new();
     public FastNoiseLite RiverNoise = new();
+
     public (Chunk? r, Chunk? l, Chunk? f, Chunk? b) GetNeighbors(int cx, int cz)
     {
         Chunks.TryGetValue((cx + 1, cz), out var r);
@@ -22,12 +23,14 @@ public class VoxelWorld
 
     public VoxelWorld()
     {
+        // General Terrain Shape
         HeightNoise.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
         HeightNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
         HeightNoise.SetFractalOctaves(5);
         HeightNoise.SetFractalLacunarity(2.0f);
         HeightNoise.SetFractalGain(0.6f);
 
+        // Climate logic for Biome blending
         TempNoise.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
         TempNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
         TempNoise.SetFractalOctaves(3);
@@ -39,11 +42,14 @@ public class VoxelWorld
         HumidityNoise.SetFrequency(0.005f);
         HumidityNoise.SetSeed(1337);
 
+        // River logic
         RiverNoise.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
         RiverNoise.SetFrequency(0.002f);
     }
 
-
+    /// <summary>
+    /// Gets a block at world coordinates. Used by Physics and Mesh Gen.
+    /// </summary>
     public byte GetBlock(int x, int y, int z)
     {
         int cx = (int)Math.Floor(x / (float)Chunk.Size);
@@ -54,9 +60,49 @@ public class VoxelWorld
 
         if (Chunks.TryGetValue((cx, cz), out var chunk))
         {
-            if (y < 0 || y >= Chunk.Height) return 0;
+            // If out of vertical bounds, return Air from the Registry
+            if (y < 0 || y >= Chunk.Height) return (byte)BlockType.Air;
+
             return chunk.Blocks[lx, y, lz];
         }
-        return 0;
+
+        // If chunk isn't loaded, return Air
+        return (byte)BlockType.Air;
+    }
+
+    // Inside VoxelWorld.cs
+    public void SetBlock(int x, int y, int z, byte type)
+    {
+        int cx = (int)Math.Floor(x / (float)Chunk.Size);
+        int cz = (int)Math.Floor(z / (float)Chunk.Size);
+
+        if (Chunks.TryGetValue((cx, cz), out var chunk))
+        {
+            int lx = x - (cx * Chunk.Size);
+            int lz = z - (cz * Chunk.Size);
+
+            if (y >= 0 && y < Chunk.Height)
+            {
+                chunk.Blocks[lx, y, lz] = type;
+                chunk.IsDirty = true; // Tell the game to rebuild this mesh
+
+                // EDGE CASE: If you break a block on the border of a chunk, 
+                // the neighbor chunk also needs to update its visible faces!
+                UpdateNeighborIfEdge(x, y, z, lx, lz, cx, cz);
+            }
+        }
+    }
+
+    private void UpdateNeighborIfEdge(int x, int y, int z, int lx, int lz, int cx, int cz)
+    {
+        if (lx == 0) MarkDirty(cx - 1, cz);
+        if (lx == Chunk.Size - 1) MarkDirty(cx + 1, cz);
+        if (lz == 0) MarkDirty(cx, cz - 1);
+        if (lz == Chunk.Size - 1) MarkDirty(cx, cz + 1);
+    }
+
+    private void MarkDirty(int cx, int cz)
+    {
+        if (Chunks.TryGetValue((cx, cz), out var neighbor)) neighbor.IsDirty = true;
     }
 }

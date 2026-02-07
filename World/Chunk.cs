@@ -66,21 +66,31 @@ public class Chunk
                 _heightMap[x, z] = finalHeight;
                 if (finalHeight > _highestPoint) _highestPoint = finalHeight;
 
-                // 4. BLOCK FILLING
+                // 4. BLOCK FILLING (The "Painting" Logic)
                 for (int y = 0; y < Height; y++)
                 {
-                    if (y <= finalHeight)
+                    if (y > finalHeight)
                     {
-                        Blocks[x, y, z] = 1; // Solid Ground
+                        // Above surface: Air or Water
+                        Blocks[x, y, z] = y <= (int)BiomeManager.SEA_LEVEL ? (byte)BlockType.Water : (byte)BlockType.Air;
                     }
-                    // Referencing the centralized public constant from BiomeManager
-                    else if (y <= (int)BiomeManager.SEA_LEVEL)
+                    else if (y == finalHeight)
                     {
-                        Blocks[x, y, z] = 2; // Water
+                        // THE SURFACE LAYER
+                        if (y <= (int)BiomeManager.SEA_LEVEL - 1)
+                            Blocks[x, y, z] = (byte)BlockType.Mud; // Underwater riverbeds
+                        else
+                            Blocks[x, y, z] = (byte)BlockType.Grass; // Dry land
+                    }
+                    else if (y > finalHeight - 4)
+                    {
+                        // SUB-SURFACE (3 blocks of dirt under the grass)
+                        Blocks[x, y, z] = (byte)BlockType.Dirt;
                     }
                     else
                     {
-                        Blocks[x, y, z] = 0; // Air
+                        // THE DEEP FOUNDATION
+                        Blocks[x, y, z] = (byte)BlockType.Stone;
                     }
                 }
             }
@@ -130,53 +140,7 @@ public class Chunk
         return Math.Max(0, 1.0f - (dist * 2.5f)); // 2.5f defines the blend 'softness'
     }
 
-    public int FillVertexData(List<float> buffer)
-    {
-        buffer.Clear();
-        var neighbors = _world.GetNeighbors(ChunkX, ChunkZ);
-        var r = neighbors.r; var l = neighbors.l; var f = neighbors.f; var b = neighbors.b;
 
-        for (int x = 0; x < Size; x++)
-        {
-            for (int z = 0; z < Size; z++)
-            {
-                int columnHeight = _heightMap[x, z];
-                int maxY = Math.Max(columnHeight, (int)BiomeManager.SEA_LEVEL);
-
-                for (int y = 0; y <= maxY; y++)
-                {
-                    byte blockType = Blocks[x, y, z];
-                    if (blockType == 0) continue;
-
-                    // NEW LOGIC: Use ShouldRenderFace instead of IsAir.
-                    // We pass the current blockType so it can decide: 
-                    // "If I am water and neighbor is water, hide the face."
-                    bool up = ShouldRenderFace(blockType, x, y + 1, z, r, l, f, b);
-                    bool down = ShouldRenderFace(blockType, x, y - 1, z, r, l, f, b);
-                    bool left = ShouldRenderFace(blockType, x - 1, y, z, r, l, f, b);
-                    bool right = ShouldRenderFace(blockType, x + 1, y, z, r, l, f, b);
-                    bool front = ShouldRenderFace(blockType, x, y, z + 1, r, l, f, b);
-                    bool back = ShouldRenderFace(blockType, x, y, z - 1, r, l, f, b);
-
-                    // If all neighbors are solid and same-type, don't waste time drawing
-                    if (!up && !down && !left && !right && !front && !back) continue;
-
-                    // 1. TOP FACE
-                    if (up) AddGreedyFace(buffer, x, y, z, 1, 1, true, blockType);
-
-                    // 2. BOTTOM FACE
-                    if (down) AddBottomFace(buffer, x, y, z, blockType);
-
-                    // 3. SIDE FACES
-                    if (left) AddVerticalGreedySide(buffer, x, y, z, 1, 0, blockType);
-                    if (right) AddVerticalGreedySide(buffer, x, y, z, 1, 1, blockType);
-                    if (front) AddVerticalGreedySide(buffer, x, y, z, 1, 2, blockType);
-                    if (back) AddVerticalGreedySide(buffer, x, y, z, 1, 3, blockType);
-                }
-            }
-        }
-        return buffer.Count;
-    }
 
     private void AddGreedyFace(List<float> v, int x, int y, int z, int w, int d, bool isTop, byte type)
     {
@@ -247,49 +211,21 @@ public class Chunk
 
     private bool ShouldRenderFace(byte currentType, int nx, int ny, int nz, Chunk? r, Chunk? l, Chunk? f, Chunk? b)
     {
-        if (ny < 0) return false;
-        if (ny >= Height) return currentType != 2; // Sky is effectively air
-
         byte neighborType = GetBlockId(nx, ny, nz, r, l, f, b);
 
-        // 1. Air is always transparent
-        if (neighborType == 0) return true;
+        // If neighbor is Air, always render
+        if (neighborType == (byte)BlockType.Air) return true;
 
-        // 2. If I am Solid and neighbor is Water, I MUST render my side.
-        // This creates the "underwater walls" of the river.
-        if (currentType != 2 && neighborType == 2) return true;
+        // If I am solid and neighbor is Water, I must render my side
+        if (currentType != (byte)BlockType.Water && neighborType == (byte)BlockType.Water) return true;
 
-        // 3. If I am Water and neighbor is Water, HIDE the face.
-        // This keeps the water surface perfectly clean.
-        if (currentType == 2 && neighborType == 2) return false;
+        // If both are water, cull the face
+        if (currentType == (byte)BlockType.Water && neighborType == (byte)BlockType.Water) return false;
 
-        // 4. Solid neighbor blocks hide faces.
+        // Default: hide face if neighbor is solid
         return false;
     }
-
-    private bool IsAir(int x, int y, int z, Chunk right, Chunk left, Chunk front, Chunk back)
-    {
-        if (y < 0 || y >= Height) return true;
-
-        byte blockID;
-
-        // Local Chunk Check
-        if (x >= 0 && x < Size && z >= 0 && z < Size)
-        {
-            blockID = Blocks[x, y, z];
-        }
-        // Neighbor Chunk Checks
-        else if (x >= Size) blockID = right == null ? (byte)0 : right.Blocks[0, y, z];
-        else if (x < 0) blockID = left == null ? (byte)0 : left.Blocks[Size - 1, y, z];
-        else if (z >= Size) blockID = front == null ? (byte)0 : front.Blocks[x, y, 0];
-        else if (z < 0) blockID = back == null ? (byte)0 : back.Blocks[x, y, Size - 1];
-        else return true;
-
-        // LOGIC: A face should be visible if the neighbor is Air (0) OR Water (2)
-        // This allows you to see the ground through the water.
-        return blockID == 0 || blockID == 2;
-    }
-
+    
     // Inside Chunk.cs
     private void AddVertex(List<float> v, Vector3 pos, Vector3 color, Vector2 uv)
     {
@@ -300,33 +236,20 @@ public class Chunk
 
     private (Vector2 min, Vector2 max, Vector3 color) GetFaceData(byte type, string face, int w, int h)
     {
-        float atlasWidthTiles = 4f; // Updated from 3 to 4
+        float atlasWidthTiles = 6f; // Total blocks in your atlas
         float atlasHeightTiles = 1f;
 
         float uUnit = 1.0f / atlasWidthTiles;
         float vUnit = 1.0f / atlasHeightTiles;
 
-        float uOffset = 0;
-
-        if (type == 2) // Water
-        {
-            uOffset = 3 * uUnit; // Jump to the 4th tile
-        }
-        else // Grass
-        {
-            if (face == "top") uOffset = 1 * uUnit;
-            else if (face == "bottom") uOffset = 2 * uUnit;
-            else uOffset = 0 * uUnit;
-        }
-
-        // We no longer need the 'type == 2 ? blue' logic here 
-        // because the Water texture itself will be blue!
-        Vector3 color = new Vector3(1.0f, 1.0f, 1.0f);
+        // Ask the registry which texture index to use for this specific face
+        int texIndex = BlockRegistry.GetTexture((BlockType)type, face); // Use the registry!
+        float uOffset = texIndex * uUnit;
 
         return (
             new Vector2(uOffset, 0),
             new Vector2(uOffset + (uUnit * w), vUnit * h),
-            color
+            Vector3.One // White color (no tinting)
         );
     }
 
@@ -337,37 +260,19 @@ public class Chunk
         List<float> waterBuffer = new List<float>();
 
         var neighbors = _world.GetNeighbors(ChunkX, ChunkZ);
-        var r = neighbors.r; var l = neighbors.l;
-        var f = neighbors.f; var b = neighbors.b;
+        var r = neighbors.r; var l = neighbors.l; var f = neighbors.f; var b = neighbors.b;
 
         for (int x = 0; x < Size; x++)
         {
             for (int z = 0; z < Size; z++)
             {
-                // We only need to loop up to the highest point in this column
-                int maxY = Math.Max(_heightMap[x, z], (int)BiomeManager.SEA_LEVEL);
-
-                for (int y = 0; y <= maxY; y++)
+                // Scanning the full column to catch layers (Air -> Water -> Mud -> Stone)
+                for (int y = 0; y < Height; y++)
                 {
                     byte blockType = Blocks[x, y, z];
-                    if (blockType == 0) continue;
+                    if (blockType == (byte)BlockType.Air) continue;
 
-                    // Pick the correct buffer based on block type
-                    List<float> currentBuffer = (blockType == 2) ? waterBuffer : opaqueBuffer;
-
-                    if (blockType == 2) // WATER
-                    {
-                        if (ShouldRenderFace(blockType, x, y + 1, z, r, l, f, b))
-                        {
-                            // We pass a small offset to lower the plane
-                            float waterSurfaceHeight = 0.0625f;
-
-                            AddWaterPlane(currentBuffer, x, y, z, waterSurfaceHeight, blockType);
-                        }
-                        continue;
-                    }
-
-                    // OPAQUE BLOCK LOGIC (Grass, Dirt, etc.)
+                    // Culling checks
                     bool up = ShouldRenderFace(blockType, x, y + 1, z, r, l, f, b);
                     bool down = ShouldRenderFace(blockType, x, y - 1, z, r, l, f, b);
                     bool left = ShouldRenderFace(blockType, x - 1, y, z, r, l, f, b);
@@ -375,16 +280,35 @@ public class Chunk
                     bool front = ShouldRenderFace(blockType, x, y, z + 1, r, l, f, b);
                     bool back = ShouldRenderFace(blockType, x, y, z - 1, r, l, f, b);
 
-                    if (up) AddGreedyFace(currentBuffer, x, y, z, 1, 1, true, blockType);
-                    if (down) AddBottomFace(currentBuffer, x, y, z, blockType);
-                    if (left) AddVerticalGreedySide(currentBuffer, x, y, z, 1, 0, blockType);
-                    if (right) AddVerticalGreedySide(currentBuffer, x, y, z, 1, 1, blockType);
-                    if (front) AddVerticalGreedySide(currentBuffer, x, y, z, 1, 2, blockType);
-                    if (back) AddVerticalGreedySide(currentBuffer, x, y, z, 1, 3, blockType);
+                    if (!up && !down && !left && !right && !front && !back) continue;
+
+                    if (blockType == (byte)BlockType.Water)
+                    {
+                        // --- WATER LOGIC ---
+                        // 1. Top Surface (Using your special plane with the 1/16th drop and dual-sides)
+                        if (up) AddWaterPlane(waterBuffer, x, y, z, 0.0625f, blockType);
+
+                        // 2. Water Sides (Always added to waterBuffer for transparency)
+                        if (left) AddVerticalGreedySide(waterBuffer, x, y, z, 1, 0, blockType);
+                        if (right) AddVerticalGreedySide(waterBuffer, x, y, z, 1, 1, blockType);
+                        if (front) AddVerticalGreedySide(waterBuffer, x, y, z, 1, 2, blockType);
+                        if (back) AddVerticalGreedySide(waterBuffer, x, y, z, 1, 3, blockType);
+
+                        if (down) AddBottomFace(waterBuffer, x, y, z, blockType);
+                    }
+                    else
+                    {
+                        // --- OPAQUE LOGIC (Grass, Dirt, Stone, Mud) ---
+                        if (up) AddGreedyFace(opaqueBuffer, x, y, z, 1, 1, true, blockType);
+                        if (down) AddBottomFace(opaqueBuffer, x, y, z, blockType);
+                        if (left) AddVerticalGreedySide(opaqueBuffer, x, y, z, 1, 0, blockType);
+                        if (right) AddVerticalGreedySide(opaqueBuffer, x, y, z, 1, 1, blockType);
+                        if (front) AddVerticalGreedySide(opaqueBuffer, x, y, z, 1, 2, blockType);
+                        if (back) AddVerticalGreedySide(opaqueBuffer, x, y, z, 1, 3, blockType);
+                    }
                 }
             }
         }
-
         return (opaqueBuffer.ToArray(), waterBuffer.ToArray());
     }
 
@@ -403,22 +327,6 @@ public class Chunk
         if (nz < 0) return b?.Blocks[nx, ny, Size - 1] ?? 0;
 
         return 0;
-    }
-
-    private void AddWaterUnderside(List<float> v, int x, int y, int z, byte type)
-    {
-        var data = GetFaceData(type, "top", 1, 1);
-        float topY = y + 1.0f;
-
-        // Triangle 1 (Clockwise from top view = Counter-Clockwise from bottom view)
-        AddVertex(v, new Vector3(x, topY, z), data.color, new Vector2(data.min.X, data.min.Y));
-        AddVertex(v, new Vector3(x + 1, topY, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
-        AddVertex(v, new Vector3(x, topY, z + 1), data.color, new Vector2(data.min.X, data.max.Y));
-
-        // Triangle 2
-        AddVertex(v, new Vector3(x, topY, z), data.color, new Vector2(data.min.X, data.min.Y));
-        AddVertex(v, new Vector3(x + 1, topY, z), data.color, new Vector2(data.max.X, data.min.Y));
-        AddVertex(v, new Vector3(x + 1, topY, z + 1), data.color, new Vector2(data.max.X, data.max.Y));
     }
 
     private void AddWaterPlane(List<float> v, int x, int y, int z, float offset, byte type)
