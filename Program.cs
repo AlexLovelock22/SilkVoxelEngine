@@ -11,23 +11,9 @@ using System.Collections.Concurrent;
 using VoxelEngine_Silk.Net_1._0.Game;
 using VoxelEngine_Silk.Net_1._0.World;
 using System.Diagnostics;
+using VoxelEngine_Silk.Net_1._0.Helpers;
 
 namespace VoxelEngine_Silk.Net_1._0;
-
-class RenderChunk
-{
-    // Pass 1: Solid
-    public uint OpaqueVAO;
-    public uint OpaqueVBO;
-    public uint OpaqueVertexCount;
-
-    // Pass 2: Water
-    public uint WaterVAO;
-    public uint WaterVBO;
-    public uint WaterVertexCount;
-
-    public Vector3 WorldPosition;
-}
 
 class Program
 {
@@ -66,7 +52,7 @@ class Program
     private static uint _moonTexture;
     private static uint _spriteShader;
     private static QuadMesh _quadMesh = null!;
-
+    private static WorldManager _worldManager = null!;
 
     static void Main(string[] args)
     {
@@ -75,7 +61,7 @@ class Program
         options.WindowBorder = WindowBorder.Resizable;
         options.Size = new Vector2D<int>(1920, 1080);
         options.Title = "Voxel Engine - Multi-Chunk View";
-        options.VSync = true;
+        options.VSync = false;
 
         window = Window.Create(options);
 
@@ -104,302 +90,63 @@ class Program
         Gl.ClearColor(0.4f, 0.6f, 0.9f, 1.0f);
 
         // 3. Texture and Shaders
-        LoadTextureAtlas(Path.Combine("Textures", "terrain.png"));
+        _textureAtlas = TextureManager.LoadTextureAtlas(Path.Combine("Textures", "terrain.png"), Gl);
 
-        // Initialize Skybox mesh
+        // Initialize Skybox mesh and textures
         _skybox = new Skybox(Gl);
-
-        _sunTexture = LoadTexture(Path.Combine("Textures", "sun.png")); //
-        _moonTexture = LoadTexture(Path.Combine("Textures", "moon.png")); //
+        _sunTexture = TextureManager.LoadTexture(Path.Combine("Textures", "sun.png"), Gl);
+        _moonTexture = TextureManager.LoadTexture(Path.Combine("Textures", "moon.png"), Gl);
 
         string vSource = Path.Combine("Shaders", "skybox.vert");
         string fSource = Path.Combine("Shaders", "skybox.frag");
 
         _quadMesh = new QuadMesh(Gl);
-        _spriteShader = CreateShaderProgram(Path.Combine("Shaders", "sprite.vert"), Path.Combine("Shaders", "sprite.frag"));
-        _skyboxShader = CreateShaderProgramFromFile(vSource, fSource);
+
+        _spriteShader = ShaderManager.CreateShaderProgram(
+            Path.Combine("Shaders", "sprite.vert"),
+            Path.Combine("Shaders", "sprite.frag"),
+            Gl
+        );
+
+        _skyboxShader = ShaderManager.CreateShaderProgramFromFile(vSource, fSource, Gl);
 
         _selectionBox = new SelectionBox(Gl);
-        _selectionShader = CompileSelectionShader();
+        _selectionShader = ShaderManager.CompileSelectionShader(Gl);
 
         _crosshair = new Crosshair(Gl);
-        _crosshairShader = CompileCrosshairShader();
+        _crosshairShader = ShaderManager.CompileCrosshairShader(Gl);
 
         string vertexCode = Path.Combine("Shaders", "shader.vert");
         string fragmentCode = Path.Combine("Shaders", "shader.frag");
-        Shader = CreateShaderProgramFromFile(vertexCode, fragmentCode);
+        Shader = ShaderManager.CreateShaderProgramFromFile(vertexCode, fragmentCode, Gl);
 
         // 4. Input and Background Tasks
         Stopwatch totalSw = Stopwatch.StartNew();
-        Task.Run(() => WorldStreamerLoop());
+
+        // Fix CS0103: Initialize the _worldManager field
+        _worldManager = new WorldManager(voxelWorld, _unloadQueue, (chunk) =>
+        {
+            Task.Run(() =>
+            {
+                // Fix CS0103/CS1503: Use the correct method name 'FillVertexData' from the Chunk class
+                // This returns the (float[] opaque, float[] water) tuple expected by _uploadQueue
+                var meshData = chunk.FillVertexData();
+                _uploadQueue.Enqueue((chunk, meshData));
+                chunk.IsDirty = false;
+            });
+        });
+
+        // Start the streaming thread via the manager helper
+        _worldManager.StartStreaming(() => player.GetEyePosition());
 
         Input = window.CreateInput();
         foreach (var mouse in Input.Mice) mouse.Cursor.CursorMode = CursorMode.Raw;
         Input.Mice[0].MouseMove += OnMouseMove;
         LastMousePos = Input.Mice[0].Position;
 
-        Gl.Disable(EnableCap.DepthTest); // Ensure it draws over the world
-        _crosshair.Render(_crosshairShader);
-        Gl.Enable(EnableCap.DepthTest);
         UpdateViewport(window.FramebufferSize);
-        
+
         Console.WriteLine($"[Perf] Engine Initialized in {totalSw.ElapsedMilliseconds}ms. Streaming started.");
-    }
-
-    private static uint CompileSelectionShader()
-    {
-        string vertCode = @"
-        #version 330 core
-        layout (location = 0) in vec3 aPos;
-        uniform mat4 uView;
-        uniform mat4 uProjection;
-        uniform mat4 uModel;
-        void main() {
-            gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
-        }";
-
-        string fragCode = @"
-        #version 330 core
-        out vec4 FragColor;
-        void main() {
-            FragColor = vec4(0.0, 0.0, 0.0, 1.0); // Solid Black
-        }";
-
-        uint vertex = Gl.CreateShader(ShaderType.VertexShader);
-        Gl.ShaderSource(vertex, vertCode);
-        Gl.CompileShader(vertex);
-
-        uint fragment = Gl.CreateShader(ShaderType.FragmentShader);
-        Gl.ShaderSource(fragment, fragCode);
-        Gl.CompileShader(fragment);
-
-        uint program = Gl.CreateProgram();
-        Gl.AttachShader(program, vertex);
-        Gl.AttachShader(program, fragment);
-        Gl.LinkProgram(program);
-
-        // Clean up individual shaders after linking
-        Gl.DeleteShader(vertex);
-        Gl.DeleteShader(fragment);
-
-        return CreateShaderProgramFromSource(vertCode, fragCode);
-    }
-
-    private static void WorldStreamerLoop()
-    {
-        const int viewDistance = 40;
-
-        while (true)
-        {
-            int pCX = (int)Math.Floor(CameraPosition.X / 16.0f);
-            int pCZ = (int)Math.Floor(CameraPosition.Z / 16.0f);
-
-            HashSet<(int, int)> visibleCoords = new HashSet<(int, int)>();
-
-            int x = 0, z = 0;
-            int dx = 0, dz = -1;
-            int sideLength = viewDistance * 2;
-            int maxChunks = sideLength * sideLength;
-
-            for (int i = 0; i < maxChunks; i++)
-            {
-                int currentX = pCX + x;
-                int currentZ = pCZ + z;
-
-                float dist = Vector2.Distance(new Vector2(currentX, currentZ), new Vector2(pCX, pCZ));
-                if (dist <= viewDistance)
-                {
-                    visibleCoords.Add((currentX, currentZ));
-                }
-
-                if (x == z || (x < 0 && x == -z) || (x > 0 && x == 1 - z))
-                {
-                    int temp = dx; dx = -dz; dz = temp;
-                }
-                x += dx; z += dz;
-            }
-
-            foreach (var coord in voxelWorld.Chunks.Keys)
-            {
-                if (!visibleCoords.Contains(coord))
-                {
-                    if (voxelWorld.Chunks.TryRemove(coord, out _))
-                    {
-                        _unloadQueue.Enqueue(coord);
-                    }
-                }
-            }
-
-            foreach (var coord in visibleCoords)
-            {
-                if (!voxelWorld.Chunks.ContainsKey(coord))
-                {
-                    var chunk = new Chunk(coord.Item1, coord.Item2, voxelWorld);
-
-                    if (voxelWorld.Chunks.TryAdd(coord, chunk))
-                    {
-                        var n = voxelWorld.GetNeighbors(coord.Item1, coord.Item2);
-                        if (n.r != null && n.l != null && n.f != null && n.b != null)
-                        {
-                            QueueChunkForMeshing(chunk);
-                        }
-
-
-                        if (n.r != null) QueueChunkForMeshing(n.r);
-                        if (n.l != null) QueueChunkForMeshing(n.l);
-                        if (n.f != null) QueueChunkForMeshing(n.f);
-                        if (n.b != null) QueueChunkForMeshing(n.b);
-                    }
-
-                    Thread.Sleep(0);
-                }
-            }
-
-            Thread.Sleep(200);
-        }
-    }
-
-    // Add this near your other static variables in Program.cs
-    private static ConcurrentBag<List<float>> _meshBuffers = new();
-
-    private static List<float> GetBufferFromPool()
-    {
-        if (_meshBuffers.TryTake(out var list)) return list;
-        return new List<float>(16 * 16 * 128); // Pre-size to avoid internal resizing
-    }
-
-
-    private static void QueueChunkForMeshing(Chunk chunk)
-    {
-        Task.Run(() =>
-        {
-            // 1. Call the new version of FillVertexData that returns (float[] opaque, float[] water)
-            var meshData = chunk.FillVertexData();
-
-            // 2. Enqueue the tuple. This matches the new ConcurrentQueue definition.
-            // It passes (chunk, (opaqueArray, waterArray))
-            _uploadQueue.Enqueue((chunk, meshData));
-
-            chunk.IsDirty = false;
-        });
-    }
-
-
-    private static unsafe void FinalizeGPUUpload(Chunk chunk, (float[] opaque, float[] water) meshData)
-    {
-        // Find or create the RenderChunk
-        RenderChunk? rc = _renderChunks.FirstOrDefault(c => c.WorldPosition == new Vector3(chunk.ChunkX * 16, 0, chunk.ChunkZ * 16));
-        if (rc == null)
-        {
-            rc = new RenderChunk { WorldPosition = new Vector3(chunk.ChunkX * 16, 0, chunk.ChunkZ * 16) };
-            _renderChunks.Add(rc);
-        }
-
-        // Upload Opaque Data
-        UploadToVAO(ref rc.OpaqueVAO, ref rc.OpaqueVBO, meshData.opaque, out rc.OpaqueVertexCount);
-
-        // Upload Water Data
-        UploadToVAO(ref rc.WaterVAO, ref rc.WaterVBO, meshData.water, out rc.WaterVertexCount);
-    }
-
-
-    private static unsafe void UploadToVAO(ref uint vao, ref uint vbo, float[] data, out uint vertexCount)
-    {
-        // Updated: 11 floats per vertex (3 pos + 3 col + 2 uv + 3 normal)
-        vertexCount = (uint)(data.Length / 11);
-        if (vertexCount == 0) return;
-
-        if (vao == 0) vao = Gl.GenVertexArray();
-        if (vbo == 0) vbo = Gl.GenBuffer();
-
-        Gl.BindVertexArray(vao);
-        Gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
-
-        fixed (float* d = data)
-            Gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), d, BufferUsageARB.StaticDraw);
-
-        int stride = 11 * sizeof(float);
-
-        // Position (Location 0)
-        Gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, (uint)stride, (void*)0);
-        Gl.EnableVertexAttribArray(0);
-
-        // Color (Location 1)
-        Gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, (uint)stride, (void*)(3 * sizeof(float)));
-        Gl.EnableVertexAttribArray(1);
-
-        // UV (Location 2)
-        Gl.VertexAttribPointer(2, 2, VertexAttribPointerType.Float, false, (uint)stride, (void*)(6 * sizeof(float)));
-        Gl.EnableVertexAttribArray(2);
-
-        // Normal (Location 3) - New!
-        Gl.VertexAttribPointer(3, 3, VertexAttribPointerType.Float, false, (uint)stride, (void*)(8 * sizeof(float)));
-        Gl.EnableVertexAttribArray(3);
-    }
-
-    // Used For Blocks
-    private static unsafe void LoadTextureAtlas(string path)
-    {
-        _textureAtlas = Gl.GenTexture();
-        Gl.BindTexture(GLEnum.Texture2D, _textureAtlas);
-
-        using (var img = Image.Load<Rgba32>(path))
-        {
-            // LOGGING: Check your file size in the console
-            Console.WriteLine($"[Texture Load] Path: {path} | Size: {img.Width}x{img.Height}");
-
-            img.Mutate(x => x.Flip(FlipMode.Vertical));
-            var pixels = new byte[4 * img.Width * img.Height];
-            img.CopyPixelDataTo(pixels);
-
-            // Fix for 16px wide textures (CS7014 fix: ensure no brackets here)
-            Gl.PixelStore(GLEnum.UnpackAlignment, 1);
-
-            fixed (void* p = pixels)
-            {
-                Gl.TexImage2D(GLEnum.Texture2D, 0, (int)GLEnum.Rgba, (uint)img.Width, (uint)img.Height, 0, GLEnum.Rgba, GLEnum.UnsignedByte, p);
-            }
-        }
-
-        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureMinFilter, (int)GLEnum.Nearest);
-        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureMagFilter, (int)GLEnum.Nearest);
-        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureWrapS, (int)GLEnum.ClampToEdge);
-        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureWrapT, (int)GLEnum.ClampToEdge);
-    }
-
-    // Used for Skybox
-    private static unsafe uint LoadTexture(string path)
-    {
-        uint handle = Gl.GenTexture();
-        Gl.BindTexture(GLEnum.Texture2D, handle);
-
-        using (var image = Image.Load<Rgba32>(path))
-        {
-            // OpenGL expects the first pixel to be bottom-left
-            image.Mutate(x => x.Flip(FlipMode.Vertical));
-
-            byte[] pixels = new byte[4 * image.Width * image.Height];
-            image.CopyPixelDataTo(pixels);
-
-            // This ensures OpenGL handles the byte alignment of your pixel data correctly
-            Gl.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
-
-            fixed (byte* ptr = pixels)
-            {
-                Gl.TexImage2D(GLEnum.Texture2D, 0, InternalFormat.Rgba, (uint)image.Width, (uint)image.Height, 0, PixelFormat.Rgba, PixelType.UnsignedByte, ptr);
-            }
-
-            // Generate mipmaps so the shader has data at all "levels"
-            Gl.GenerateMipmap(GLEnum.Texture2D);
-        }
-
-        // Standard Pixel Art Settings
-        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureMinFilter, (int)GLEnum.NearestMipmapLinear); // Use mipmaps but keep pixels sharp
-        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureMagFilter, (int)GLEnum.Nearest);
-        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureWrapS, (int)GLEnum.Repeat);
-        Gl.TexParameter(GLEnum.Texture2D, GLEnum.TextureWrapT, (int)GLEnum.Repeat);
-
-        return handle;
     }
 
     private static void OnRender(double deltaTime)
@@ -413,7 +160,8 @@ class Program
 
         var view = Matrix4x4.CreateLookAt(eyePos, eyePos + player.CameraFront, player.CameraUp);
         float aspect = (float)window.Size.X / (float)window.Size.Y;
-        var projection = Matrix4x4.CreatePerspectiveFieldOfView(70f * (float)Math.PI / 180f, aspect, 0.1f, 2000.0f); _frustum.Update(view * projection);
+        var projection = Matrix4x4.CreatePerspectiveFieldOfView(70f * (float)Math.PI / 180f, aspect, 0.1f, 2000.0f);
+        _frustum.Update(view * projection);
 
         // --- PASS 1: SKYBOX ---
         Gl.UseProgram(_skyboxShader);
@@ -424,12 +172,11 @@ class Program
         int timeLoc = Gl.GetUniformLocation(_skyboxShader, "uTime");
         if (timeLoc != -1)
         {
-            // Use TotalTicks / TicksPerSecond for a smooth, increasing float
             float shaderTime = (float)((double)_timeManager.TotalTicks / TimeManager.TicksPerSecond);
             Gl.Uniform1(timeLoc, shaderTime);
         }
         _skybox.Render(_skyboxShader, view, projection, sunDir);
-        Gl.Flush(); // Ensure skybox commands are processed
+        Gl.Flush();
 
         // --- PASS 1.5: SUN/MOON ---
         Gl.Enable(GLEnum.Blend);
@@ -443,12 +190,17 @@ class Program
         Gl.DepthMask(true);
 
         Gl.UseProgram(Shader);
-        Gl.ActiveTexture(GLEnum.Texture0);
-        Gl.BindTexture(GLEnum.Texture2D, _textureAtlas);
-        Gl.Uniform1(Gl.GetUniformLocation(Shader, "uTexture"), 0);
+
+        // FIX: Bind the _textureAtlas (terrain) here, NOT _sunTexture
+        TextureManager.Bind(Gl, _textureAtlas, 0);
+
+        // IMPORTANT: Tell the shader that 'uTexture' is at Unit 0
+        int texLoc = Gl.GetUniformLocation(Shader, "uTexture");
+        if (texLoc != -1) Gl.Uniform1(texLoc, 0);
+
         Gl.Uniform3(Gl.GetUniformLocation(Shader, "uSunDir"), sunDir.X, sunDir.Y, sunDir.Z);
-        SetUniformMatrix(Shader, "uView", view);
-        SetUniformMatrix(Shader, "uProjection", projection);
+        MeshManager.SetUniformMatrix(Gl, Shader, "uView", view);
+        MeshManager.SetUniformMatrix(Gl, Shader, "uProjection", projection);
 
         RenderChunk[] chunksToDraw;
         lock (_renderChunks) { chunksToDraw = _renderChunks.ToArray(); }
@@ -457,9 +209,11 @@ class Program
         {
             if (rc.OpaqueVertexCount == 0) continue;
             if (!_frustum.IsBoxVisible(rc.WorldPosition, rc.WorldPosition + new Vector3(16, 256, 16))) continue;
-            SetUniformMatrix(Shader, "uModel", Matrix4x4.CreateTranslation(rc.WorldPosition));
-            Gl.BindVertexArray(rc.OpaqueVAO);
-            Gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)rc.OpaqueVertexCount);
+
+            MeshManager.SetUniformMatrix(Gl, Shader, "uModel", Matrix4x4.CreateTranslation(rc.WorldPosition));
+
+            // Clean replacement for BindVertexArray and DrawArrays
+            MeshManager.RenderChunkMesh(Gl, rc.OpaqueVAO, rc.OpaqueVertexCount);
         }
 
         // --- PASS 3: WATER ---
@@ -468,9 +222,10 @@ class Program
         foreach (var rc in chunksToDraw)
         {
             if (rc.WaterVertexCount == 0) continue;
-            SetUniformMatrix(Shader, "uModel", Matrix4x4.CreateTranslation(rc.WorldPosition));
-            Gl.BindVertexArray(rc.WaterVAO);
-            Gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)rc.WaterVertexCount);
+            MeshManager.SetUniformMatrix(Gl, Shader, "uModel", Matrix4x4.CreateTranslation(rc.WorldPosition));
+
+            // Clean replacement
+            MeshManager.RenderChunkMesh(Gl, rc.WaterVAO, rc.WaterVertexCount);
         }
 
         // --- PASS 4: SELECTION OUTLINE ---
@@ -495,88 +250,26 @@ class Program
         Gl.DepthMask(true);
     }
 
-    private static unsafe void SetUniformMatrix(uint shader, string name, Matrix4x4 matrix)
-    {
-        int location = Gl.GetUniformLocation(shader, name);
-        if (location != -1)
-            Gl.UniformMatrix4(location, 1, false, (float*)&matrix);
-    }
-
-    private static uint CompileShader(ShaderType type, string code)
-    {
-        uint handle = Gl.CreateShader(type);
-        Gl.ShaderSource(handle, code);
-        Gl.CompileShader(handle);
-        string infoLog = Gl.GetShaderInfoLog(handle);
-        if (!string.IsNullOrWhiteSpace(infoLog))
-            Console.WriteLine($"Error compiling {type}: {infoLog}");
-        return handle;
-    }
-
     private static void OnUpdate(double deltaTime)
     {
         var keyboard = Input.Keyboards[0];
 
-        while (_unloadQueue.TryDequeue(out var coords))
-        {
-            lock (_renderChunks)
-            {
-                var existing = _renderChunks.Find(rc =>
-                    (int)Math.Floor(rc.WorldPosition.X / 16.0f) == coords.x &&
-                    (int)Math.Floor(rc.WorldPosition.Z / 16.0f) == coords.z);
-
-                if (existing != null)
-                {
-                    // Delete BOTH sets of GPU objects
-                    if (existing.OpaqueVAO != 0) Gl.DeleteVertexArray(existing.OpaqueVAO);
-                    if (existing.OpaqueVBO != 0) Gl.DeleteBuffer(existing.OpaqueVBO);
-                    if (existing.WaterVAO != 0) Gl.DeleteVertexArray(existing.WaterVAO);
-                    if (existing.WaterVBO != 0) Gl.DeleteBuffer(existing.WaterVBO);
-
-                    _renderChunks.Remove(existing);
-                }
-            }
-        }
+        // 1. Let the manager handle unloading meshes from GPU
+        _worldManager.ProcessUnloadQueue(Gl, _renderChunks);
 
         _timeManager.Update(deltaTime);
 
-        int uploadLimit = _uploadQueue.Count > 100 ? 50 : 5;
-        for (int i = 0; i < uploadLimit; i++)
-        {
-            // 'data.meshData' now contains the tuple of (opaque, water)
-            if (_uploadQueue.TryDequeue(out var data))
-                FinalizeGPUUpload(data.chunk, data.meshData);
-            else break;
-        }
+        // 2. Let the manager handle uploading new meshes to GPU
+        MeshManager.ProcessUploadQueue(Gl, _renderChunks, _uploadQueue);
 
         player.Update(deltaTime, keyboard, voxelWorld);
         player.HandleInteraction(Input, voxelWorld, (float)deltaTime);
 
-        foreach (var chunk in voxelWorld.Chunks.Values)
-        {
-            if (chunk.IsDirty)
-            {
-                chunk.IsDirty = false; // Reset the flag so we don't queue it 1000 times
+        // 3. Let the manager check for blocks that were changed and need new meshes
+        _worldManager.UpdateDirtyChunks();
 
-                // Push the chunk back into your generation thread
-                Task.Run(() =>
-                {
-                    var meshData = chunk.FillVertexData();
-                    // This 'uploadQueue' is what your Program.cs uses to call FinalizeGPUUpload
-                    _uploadQueue.Enqueue((chunk, meshData));
-                });
-            }
-        }
-
-        _timePassed += deltaTime;
-        _frameCount++;
-        if (_timePassed >= 1.0)
-        {
-            double fps = _frameCount / _timePassed;
-            window.Title = $"FPS: {fps:F0} | Position: {player.Position.X:F1}, {player.Position.Y:F1}, {player.Position.Z:F1}";
-            _timePassed = 0;
-            _frameCount = 0;
-        }
+        // Standard engine overhead
+        UpdatePerformanceCounters(deltaTime);
 
         if (keyboard.IsKeyPressed(Key.Escape)) window.Close();
     }
@@ -587,100 +280,6 @@ class Program
         LastMousePos = position;
 
         player.Rotate(mouseOffset);
-    }
-
-    private static uint CompileCrosshairShader()
-    {
-        string vertCode = @"
-    #version 330 core
-    layout (location = 0) in vec2 aPos;
-    void main() {
-        gl_Position = vec4(aPos, 0.0, 1.0);
-    }";
-
-        string fragCode = @"
-    #version 330 core
-    out vec4 FragColor;
-    void main() {
-        FragColor = vec4(1.0, 1.0, 1.0, 0.8); 
-    }";
-
-        return CreateShaderProgramFromSource(vertCode, fragCode);
-    }
-
-    private static uint CreateShaderProgram(string vertexPath, string fragmentPath)
-    {
-        // Read the actual text inside the files
-        string vertexSource = File.ReadAllText(vertexPath);
-        string fragmentSource = File.ReadAllText(fragmentPath);
-
-        uint vertexShader = Gl.CreateShader(ShaderType.VertexShader);
-        Gl.ShaderSource(vertexShader, vertexSource);
-        Gl.CompileShader(vertexShader);
-        CheckShaderError(vertexShader, "Vertex", vertexPath);
-
-        uint fragmentShader = Gl.CreateShader(ShaderType.FragmentShader);
-        Gl.ShaderSource(fragmentShader, fragmentSource);
-        Gl.CompileShader(fragmentShader);
-        CheckShaderError(fragmentShader, "Fragment", fragmentPath);
-
-        uint program = Gl.CreateProgram();
-        Gl.AttachShader(program, vertexShader);
-        Gl.AttachShader(program, fragmentShader);
-        Gl.LinkProgram(program);
-
-        Gl.GetProgram(program, ProgramPropertyARB.LinkStatus, out int status);
-        if (status == 0)
-            Console.WriteLine($"Link Error: {Gl.GetProgramInfoLog(program)}");
-
-        Gl.DeleteShader(vertexShader);
-        Gl.DeleteShader(fragmentShader);
-        return program;
-    }
-
-    private static void CheckShaderError(uint shader, string type, string path)
-    {
-        string infoLog = Gl.GetShaderInfoLog(shader);
-        if (!string.IsNullOrWhiteSpace(infoLog))
-            Console.WriteLine($"{type} Shader Error in {path}: {infoLog}");
-    }
-
-
-    // Use this for shaders that exist as files (Skybox, Terrain)
-    private static uint CreateShaderProgramFromFile(string vertexPath, string fragmentPath)
-    {
-        string vertexSource = File.ReadAllText(vertexPath);
-        string fragmentSource = File.ReadAllText(fragmentPath);
-        return CreateShaderProgramFromSource(vertexSource, fragmentSource);
-    }
-
-    // Use this for shaders defined as strings in C# (Crosshair, SelectionBox)
-    private static uint CreateShaderProgramFromSource(string vertexSource, string fragmentSource)
-    {
-        uint vertexShader = Gl.CreateShader(ShaderType.VertexShader);
-        Gl.ShaderSource(vertexShader, vertexSource);
-        Gl.CompileShader(vertexShader);
-
-        // Check for errors
-        string vLog = Gl.GetShaderInfoLog(vertexShader);
-        if (!string.IsNullOrWhiteSpace(vLog)) Console.WriteLine($"Vertex Error: {vLog}");
-
-        uint fragmentShader = Gl.CreateShader(ShaderType.FragmentShader);
-        Gl.ShaderSource(fragmentShader, fragmentSource);
-        Gl.CompileShader(fragmentShader);
-
-        string fLog = Gl.GetShaderInfoLog(fragmentShader);
-        if (!string.IsNullOrWhiteSpace(fLog)) Console.WriteLine($"Fragment Error: {fLog}");
-
-        uint program = Gl.CreateProgram();
-        Gl.AttachShader(program, vertexShader);
-        Gl.AttachShader(program, fragmentShader);
-        Gl.LinkProgram(program);
-
-        Gl.DeleteShader(vertexShader);
-        Gl.DeleteShader(fragmentShader);
-
-        return program;
     }
 
     private static void RenderSunMoon(Matrix4x4 view, Matrix4x4 projection, Vector3 sunDir)
@@ -703,12 +302,12 @@ class Program
         float sunScale = 25f;
         Matrix4x4 sunModel = Matrix4x4.CreateScale(sunScale) * sunRotation * Matrix4x4.CreateTranslation(sunDir * 100f);
 
-        SetUniformMatrix(_spriteShader, "uModel", sunModel);
-        SetUniformMatrix(_spriteShader, "uView", view);
-        SetUniformMatrix(_spriteShader, "uProjection", projection);
+        MeshManager.SetUniformMatrix(Gl, _spriteShader, "uModel", sunModel);
+        MeshManager.SetUniformMatrix(Gl, _spriteShader, "uView", view);
+        MeshManager.SetUniformMatrix(Gl, _spriteShader, "uProjection", projection);
 
-        Gl.ActiveTexture(GLEnum.Texture0);
-        Gl.BindTexture(GLEnum.Texture2D, _sunTexture);
+        TextureManager.Bind(Gl, _sunTexture, 0);
+
         _quadMesh.Render();
 
         // --- DRAW MOON ---
@@ -718,13 +317,27 @@ class Program
 
         Matrix4x4 moonModel = Matrix4x4.CreateScale(20f) * moonRotation * Matrix4x4.CreateTranslation(moonDir * 100f);
 
-        SetUniformMatrix(_spriteShader, "uModel", moonModel);
-        Gl.BindTexture(GLEnum.Texture2D, _moonTexture);
+        MeshManager.SetUniformMatrix(Gl, _spriteShader, "uModel", moonModel);
+        TextureManager.Bind(Gl, _moonTexture, 0);
         _quadMesh.Render();
     }
 
     private static void UpdateViewport(Vector2D<int> size)
     {
         Gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
+    }
+
+    private static void UpdatePerformanceCounters(double deltaTime)
+    {
+        _timePassed += deltaTime;
+        _frameCount++;
+
+        if (_timePassed >= 1.0)
+        {
+            double fps = _frameCount / _timePassed;
+            window.Title = $"FPS: {fps:F0} | Position: {player.Position.X:F1}, {player.Position.Y:F1}, {player.Position.Z:F1}";
+            _timePassed = 0;
+            _frameCount = 0;
+        }
     }
 }
