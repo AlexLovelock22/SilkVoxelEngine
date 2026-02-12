@@ -19,6 +19,10 @@ public class Chunk
     public int ChunkZ { get; private set; }
     private VoxelWorld _world;
 
+    public int[,] GetHeightMap() => _heightMap;
+
+
+
     public Chunk(int chunkX, int chunkZ, VoxelWorld world)
     {
         ChunkX = chunkX;
@@ -30,6 +34,7 @@ public class Chunk
     private void GenerateTerrain(VoxelWorld world)
     {
         _highestPoint = 0;
+        int[,] tempMap = new int[Size, Size];
 
         for (int x = 0; x < Size; x++)
         {
@@ -38,65 +43,56 @@ public class Chunk
                 float worldX = (ChunkX * Size) + x;
                 float worldZ = (ChunkZ * Size) + z;
 
-                // 1. MACRO & CLIMATE
                 float macroNoise = world.HeightNoise.GetNoise(worldX * 0.005f, worldZ * 0.005f);
                 float continentalOffset = macroNoise * 40f;
-
-                // Sampling climate per-block as per your original logic
                 float temp = (world.TempNoise.GetNoise(worldX * 0.5f, worldZ * 0.5f) + 1f) / 2f;
                 float humidity = (world.HumidityNoise.GetNoise(worldX * 0.5f, worldZ * 0.5f) + 1f) / 2f;
 
-                // 2. BASE BIOME HEIGHT
                 float biomeHeight = GetWeightedHeight(world, worldX, worldZ, temp, humidity);
                 float finalHeightFloat = biomeHeight + continentalOffset;
 
-                // 3. RIVER CARVING
                 float riverSample = MathF.Abs(world.RiverNoise.GetNoise(worldX, worldZ));
-                float riverThreshold = 0.02f;
-
-                if (riverSample < riverThreshold)
+                if (riverSample < 0.02f)
                 {
-                    float riverCurve = 1.0f - (riverSample / riverThreshold);
-                    finalHeightFloat -= (riverCurve * 15f);
+                    finalHeightFloat -= ((1.0f - (riverSample / 0.02f)) * 15f);
                 }
 
-                int finalHeight = (int)MathF.Round(finalHeightFloat);
+                // Maintain strictly integer alignment for the voxel blocks
+                int finalHeight = (int)MathF.Floor(finalHeightFloat);
                 finalHeight = Math.Clamp(finalHeight, 0, Height - 1);
 
-                _heightMap[x, z] = finalHeight;
+                tempMap[x, z] = finalHeight;
                 if (finalHeight > _highestPoint) _highestPoint = finalHeight;
 
-                // 4. BLOCK FILLING (The "Painting" Logic)
                 for (int y = 0; y < Height; y++)
                 {
                     if (y > finalHeight)
                     {
-                        // Above surface: Air or Water
                         Blocks[x, y, z] = y <= (int)BiomeManager.SEA_LEVEL ? (byte)BlockType.Water : (byte)BlockType.Air;
                     }
                     else if (y == finalHeight)
                     {
-                        // THE SURFACE LAYER
-                        if (y <= (int)BiomeManager.SEA_LEVEL - 1)
-                            Blocks[x, y, z] = (byte)BlockType.Mud; // Underwater riverbeds
-                        else
-                            Blocks[x, y, z] = (byte)BlockType.Grass; // Dry land
+                        Blocks[x, y, z] = y <= (int)BiomeManager.SEA_LEVEL - 1 ? (byte)BlockType.Mud : (byte)BlockType.Grass;
                     }
                     else if (y > finalHeight - 4)
                     {
-                        // SUB-SURFACE (3 blocks of dirt under the grass)
                         Blocks[x, y, z] = (byte)BlockType.Dirt;
                     }
                     else
                     {
-                        // THE DEEP FOUNDATION
                         Blocks[x, y, z] = (byte)BlockType.Stone;
                     }
                 }
             }
         }
+
+        for (int x = 0; x < Size; x++)
+            for (int z = 0; z < Size; z++)
+                _heightMap[x, z] = tempMap[x, z];
+
         this.IsDirty = true;
     }
+
     private float GetWeightedHeight(VoxelWorld world, float wx, float wz, float t, float h)
     {
         // Sample all biomes and blend them based on climate influence

@@ -5,7 +5,7 @@ namespace VoxelEngine_Silk.Net_1._0.Game;
 public class TimeManager
 {
     public const int TicksPerDay = 24000;
-    public const double TicksPerSecond = 200.0;
+    public const double TicksPerSecond = 600.0;
     private const double SecondsPerTick = 1.0 / TicksPerSecond;
 
     public long TotalTicks { get; private set; }
@@ -33,17 +33,22 @@ public class TimeManager
         // Future home for: 
         // if (TotalTicks % 100 == 0) DoRandomCropGrowth();
     }
-
     private void UpdateSunPosition()
     {
-        // Calculate angle based on day progress (0.0 to 1.0)
-        // Offset by PI/2 so the sun starts at the horizon (Sunrise)
+        // The angle moves the sun from East to West
         float angle = (DayProgress * MathF.PI * 2.0f) - (MathF.PI / 2.0f);
 
         float x = MathF.Cos(angle);
         float y = MathF.Sin(angle);
-        
-        // Z gives it a slight tilt so it's not perfectly overhead
-        SunDirection = Vector3.Normalize(new Vector3(x, y, 0.2f));
+
+        // THE FIX: Increased the Z-axis tilt to 0.5f to force diagonal light rays.
+        // Also ensuring Y doesn't go too far below the horizon during tests.
+        Vector3 rawDir = new Vector3(x, MathF.Max(y, -0.2f), 0.5f);
+        SunDirection = Vector3.Normalize(rawDir);
+
+        if (TotalTicks % 1000 == 0)
+        {
+            Console.WriteLine($"[TIME] Progress: {DayProgress:F2} | SunDir: {SunDirection.X:F2}, {SunDirection.Y:F2}, {SunDirection.Z:F2}");
+        }
     }
 }

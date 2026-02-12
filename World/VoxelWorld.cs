@@ -11,6 +11,12 @@ public class VoxelWorld
     public FastNoiseLite TempNoise = new();
     public FastNoiseLite HumidityNoise = new();
     public FastNoiseLite RiverNoise = new();
+    private bool _heightmapNeedsUpdate = false;
+
+    public const int WorldMapSize = 1024;
+    private byte[] _globalHeightmapData = new byte[WorldMapSize * WorldMapSize];
+
+    public byte[] GetHeightmapData() => _globalHeightmapData;
 
     public (Chunk? r, Chunk? l, Chunk? f, Chunk? b) GetNeighbors(int cx, int cz)
     {
@@ -105,4 +111,27 @@ public class VoxelWorld
     {
         if (Chunks.TryGetValue((cx, cz), out var neighbor)) neighbor.IsDirty = true;
     }
+
+
+    public void StitchChunkToHeightmap(Chunk chunk)
+{
+    int[,] localMap = chunk.GetHeightMap();
+    if (localMap[8, 8] == 0 && localMap[0, 0] == 0) return;
+
+    int worldStartX = chunk.ChunkX * Chunk.Size;
+    int worldStartZ = chunk.ChunkZ * Chunk.Size;
+
+    for (int z = 0; z < Chunk.Size; z++)
+    {
+        for (int x = 0; x < Chunk.Size; x++)
+        {
+            // This coordinate logic is mirrored in our new shader's GetHeight function
+            int mX = (((worldStartX + x) + 512) % 1024 + 1024) % 1024;
+            int mZ = (((worldStartZ + z) + 512) % 1024 + 1024) % 1024;
+
+            _globalHeightmapData[mZ * 1024 + mX] = (byte)localMap[x, z];
+        }
+    }
+    _heightmapNeedsUpdate = true;
+}
 }

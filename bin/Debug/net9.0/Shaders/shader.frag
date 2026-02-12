@@ -1,41 +1,75 @@
 #version 330 core
+
+in vec3 vNormal;
+in vec3 vWorldPos;
 out vec4 FragColor;
 
-in vec3 ourColor;
-in vec2 TexCoord;
-in vec3 vNormal;
+uniform sampler2D uHeightmap;
+uniform vec3 uSunDir;
 
-uniform sampler2D uTexture;
-uniform vec3 uSunDir; 
+// Exact heightmap lookup matching the C# 1024-unit world
+float GetHeight(vec2 worldXZ) {
+    vec2 uv = (worldXZ + 512.0) / 1024.0;
+    return texture(uHeightmap, uv).r * 255.0;
+}
 
-void main()
-{
-    vec4 texColor = texture(uTexture, TexCoord);
-    if(texColor.a < 0.1) discard;
+void main() {
+    if (uSunDir.y <= 0.05) { FragColor = vec4(vec3(0.1), 1.0); return; }
 
-    vec3 norm = normalize(vNormal);
-    vec3 lightDir = normalize(uSunDir);
+    vec3 rayDir = normalize(uSunDir);
+    // Start at surface, biased by normal to prevent self-collision
+    vec3 rayPos = vWorldPos + (vNormal * 0.01);
+    float baseHeight = GetHeight(vWorldPos.xz);
 
-    // 1. Sunlight Visibility
-    // We make the fade-out smoother so sunset lasts longer
-    float sunVisibility = clamp(uSunDir.y + 0.2, 0.0, 1.0);
-    
-    // 2. Diffuse (Direct Light)
-    // We use max(dot, 0.0) so faces pointing away from the sun don't get 'negative' light
-    float diff = max(dot(norm, lightDir), 0.0);
+    // DDA SETUP
+    vec3 mapPos = floor(rayPos);
+    vec3 deltaDist = abs(vec3(length(rayDir)) / rayDir);
+    vec3 rayStep = sign(rayDir);
+    vec3 sideDist = (rayStep * (mapPos - rayPos) + (rayStep * 0.5) + 0.5) * deltaDist;
 
-    // 3. Dynamic Ambient (The "Too Dark" Fix)
-    // Day Ambient: 0.4 (Bright shadows)
-    // Night Ambient: 0.15 (Dark but visible)
-    float ambient = mix(0.35, 0.7, sunVisibility);
-    
-    // 4. Combine
-    // Sunlight only affects the 'diff' part. Ambient is always there.
-    float intensity = ambient + (diff * sunVisibility * 0.7);
+    float shadow = 1.0;
 
-    // 5. Top Face Boost
-    // This mimics "Sky Light" (light coming from the blue sky above)
-    if(norm.y > 0.5) intensity += 0.15 * sunVisibility;
+    // Traverse the grid block-by-block
+    for (int i = 0; i < 128; i++) {
+        // Sample the heightmap at the current block center
+        float h = GetHeight(mapPos.xz);
 
-    FragColor = texColor * vec4(ourColor * intensity, 1.0);
+        // If the current block height is greater than our ray's current altitude
+        if (h + 1.0 > rayPos.y) {
+            // Ignore the block we started on
+            if (!(h <= baseHeight + 0.1 && vNormal.y > 0.5)) {
+                shadow = 0.4;
+                break;
+            }
+        }
+
+        // Jump to the next grid boundary
+        if (sideDist.x < sideDist.y) {
+            if (sideDist.x < sideDist.z) {
+                sideDist.x += deltaDist.x;
+                mapPos.x += rayStep.x;
+            } else {
+                sideDist.z += deltaDist.z;
+                mapPos.z += rayStep.z;
+            }
+        } else {
+            if (sideDist.y < sideDist.z) {
+                sideDist.y += deltaDist.y;
+                mapPos.y += rayStep.y;
+            } else {
+                sideDist.z += deltaDist.z;
+                mapPos.z += rayStep.z;
+            }
+        }
+
+        // Update ray altitude based on the jump
+        // (Simplified for heightmap-based DDA)
+        rayPos += rayDir * 0.5; 
+
+        if (rayPos.y > 255.0 || rayPos.y < 0.0) break;
+    }
+
+    float diffuse = max(dot(vNormal, rayDir), 0.0);
+    vec3 grassColor = vec3(0.2, 0.5, 0.1);
+    FragColor = vec4(grassColor * (0.15 + diffuse * shadow), 1.0);
 }

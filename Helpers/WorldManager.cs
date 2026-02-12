@@ -23,82 +23,80 @@ public class WorldManager
         Task.Run(() => WorldStreamerLoop(getCameraPos));
     }
 
-    private void WorldStreamerLoop(Func<Vector3> getCameraPos)
+   private void WorldStreamerLoop(Func<Vector3> getCameraPos)
+{
+    // FIX: 31 chunks in each direction + center chunk = 63 chunks.
+    // 63 * 16 = 1008 pixels. This fits inside your 1024px map perfectly.
+    const int viewDistance = 31; 
+
+    while (true)
     {
-        const int viewDistance = 40;
+        Vector3 camPos = getCameraPos();
+        int pCX = (int)Math.Floor(camPos.X / 16.0f);
+        int pCZ = (int)Math.Floor(camPos.Z / 16.0f);
 
-        while (true)
+        HashSet<(int, int)> visibleCoords = new HashSet<(int, int)>();
+
+        // Ensure the spiral covers the full square
+        int sideLength = (viewDistance * 2) + 1;
+        int maxChunks = sideLength * sideLength;
+
+        int x = 0, z = 0;
+        int dx = 0, dz = -1;
+
+        for (int i = 0; i < maxChunks; i++)
         {
-            // Fix: Use the delegate to get the player position
-            Vector3 camPos = getCameraPos();
-            int pCX = (int)Math.Floor(camPos.X / 16.0f);
-            int pCZ = (int)Math.Floor(camPos.Z / 16.0f);
+            int currentX = pCX + x;
+            int currentZ = pCZ + z;
 
-            HashSet<(int, int)> visibleCoords = new HashSet<(int, int)>();
-
-            // YOUR SPIRAL LOGIC RESTORED
-            int x = 0, z = 0;
-            int dx = 0, dz = -1;
-            int sideLength = viewDistance * 2;
-            int maxChunks = sideLength * sideLength;
-
-            for (int i = 0; i < maxChunks; i++)
+            // SQUARE CHECK: This fills the corners and matches the texture boundaries
+            if (Math.Abs(x) <= viewDistance && Math.Abs(z) <= viewDistance)
             {
-                int currentX = pCX + x;
-                int currentZ = pCZ + z;
-
-                float dist = Vector2.Distance(new Vector2(currentX, currentZ), new Vector2(pCX, pCZ));
-                if (dist <= viewDistance)
-                {
-                    visibleCoords.Add((currentX, currentZ));
-                }
-
-                if (x == z || (x < 0 && x == -z) || (x > 0 && x == 1 - z))
-                {
-                    int temp = dx; dx = -dz; dz = temp;
-                }
-                x += dx; z += dz;
+                visibleCoords.Add((currentX, currentZ));
             }
 
-            // Unloading
-            foreach (var coord in _voxelWorld.Chunks.Keys)
+            if (x == z || (x < 0 && x == -z) || (x > 0 && x == 1 - z))
             {
-                if (!visibleCoords.Contains(coord))
-                {
-                    if (_voxelWorld.Chunks.TryRemove(coord, out _))
-                    {
-                        _unloadQueue.Enqueue(coord);
-                    }
-                }
+                int temp = dx; dx = -dz; dz = temp;
             }
-
-            // Loading & Meshing
-            foreach (var coord in visibleCoords)
-            {
-                if (!_voxelWorld.Chunks.ContainsKey(coord))
-                {
-                    var chunk = new Chunk(coord.Item1, coord.Item2, _voxelWorld);
-
-                    if (_voxelWorld.Chunks.TryAdd(coord, chunk))
-                    {
-                        var n = _voxelWorld.GetNeighbors(coord.Item1, coord.Item2);
-
-                        // Fix: Use the callback instead of the old QueueChunkForMeshing method
-                        if (n.r != null && n.l != null && n.f != null && n.b != null)
-                            _onChunkReadyForMeshing(chunk);
-
-                        if (n.r != null) _onChunkReadyForMeshing(n.r);
-                        if (n.l != null) _onChunkReadyForMeshing(n.l);
-                        if (n.f != null) _onChunkReadyForMeshing(n.f);
-                        if (n.b != null) _onChunkReadyForMeshing(n.b);
-                    }
-                    Thread.Sleep(0);
-                }
-            }
-
-            Thread.Sleep(200);
+            x += dx; z += dz;
         }
+
+        // ... rest of your unloading/loading logic ...
+        foreach (var coord in _voxelWorld.Chunks.Keys)
+        {
+            if (!visibleCoords.Contains(coord))
+            {
+                if (_voxelWorld.Chunks.TryRemove(coord, out _))
+                {
+                    _unloadQueue.Enqueue(coord);
+                }
+            }
+        }
+
+        foreach (var coord in visibleCoords)
+        {
+            if (!_voxelWorld.Chunks.ContainsKey(coord))
+            {
+                var chunk = new Chunk(coord.Item1, coord.Item2, _voxelWorld);
+                if (_voxelWorld.Chunks.TryAdd(coord, chunk))
+                {
+                    var n = _voxelWorld.GetNeighbors(coord.Item1, coord.Item2);
+                    if (n.r != null && n.l != null && n.f != null && n.b != null)
+                        _onChunkReadyForMeshing(chunk);
+                    
+                    if (n.r != null) _onChunkReadyForMeshing(n.r);
+                    if (n.l != null) _onChunkReadyForMeshing(n.l);
+                    if (n.f != null) _onChunkReadyForMeshing(n.f);
+                    if (n.b != null) _onChunkReadyForMeshing(n.b);
+                }
+                Thread.Sleep(0);
+            }
+        }
+        Thread.Sleep(200);
     }
+}
+    
     public void ProcessUnloadQueue(GL gl, List<RenderChunk> renderChunks)
     {
         while (_unloadQueue.TryDequeue(out var coords))

@@ -1,0 +1,262 @@
+PHASE 0 – VOXEL WORLD & LIGHTING COORDINATE CONTRACT
+===================================================
+
+This document defines the canonical spatial, solidity, and synchronization
+rules for the voxel engine. All future systems (including DDA raymarch
+sun shadows) must conform to this contract exactly.
+
+---------------------------------------------------
+1. WORLD AND VOXEL SPACE
+---------------------------------------------------
+
+World space:
+- Continuous, float-based.
+- No global offsets or biases applied.
+
+Voxel space:
+- Discrete, integer grid.
+- Each voxel occupies the unit cube:
+  [x, x+1), [y, y+1), [z, z+1)
+
+World → voxel mapping:
+- voxelCoord = floor(worldPos)
+- No casting, rounding, or epsilon offsets.
+- Negative coordinates must behave correctly.
+
+---------------------------------------------------
+2. CHUNK COORDINATES
+---------------------------------------------------
+
+Chunk size:
+- 16 (X) × 256 (Y) × 16 (Z)
+
+Chunk coordinate mapping:
+- cx = floor(worldX / 16)
+- cz = floor(worldZ / 16)
+
+Local voxel coordinates:
+- lx = worldX - (cx * 16)
+- lz = worldZ - (cz * 16)
+- y is unchanged
+
+Invariant:
+- lx, lz are always in the range [0, 15].
+
+---------------------------------------------------
+3. VERTICAL WORLD LIMITS
+---------------------------------------------------
+
+World height:
+- Valid voxel Y range is:
+  0 ≤ y < 256
+
+Out-of-range access:
+- Any voxel query outside this range is treated as Air.
+
+---------------------------------------------------
+4. BLOCK SOLIDITY
+---------------------------------------------------
+
+Block storage:
+- Blocks are stored as byte values.
+
+Solidity definition:
+- blockId == 0  → Air (empty)
+- blockId != 0  → Occupied (solid)
+
+This definition is currently used consistently by:
+- Face culling
+- Mesh generation
+- Collision
+- Rendering
+
+Water:
+- Stored as a non-zero blockId.
+- Rendered separately.
+- Shadow behavior must be explicitly defined later
+  (default assumption: water does NOT block sunlight).
+
+No partial blocks exist at this stage.
+All blocks are treated as full cubes.
+
+---------------------------------------------------
+5. MESH AND WORLD ALIGNMENT
+---------------------------------------------------
+
+Mesh generation:
+- Vertices are generated in chunk-local space:
+  x ∈ [0, 16]
+  y ∈ [0, 256]
+  z ∈ [0, 16]
+
+Chunk world offset:
+- (chunkX * 16, 0, chunkZ * 16)
+
+Final world position:
+- worldPos = localPos + chunkWorldOffset
+
+Voxel alignment guarantee:
+- floor(worldPos) maps exactly to the voxel that produced the geometry.
+
+---------------------------------------------------
+6. SUN DIRECTION SEMANTICS
+---------------------------------------------------
+
+Sun direction:
+- Provided as a normalized vector.
+- Points FROM the surface TOWARD the sun.
+
+Lighting usage:
+- diffuse = max(dot(normal, sunDir), 0)
+
+Night behavior:
+- When sunDir.y ≤ 0:
+  - Sun visibility = 0
+  - No shadow raymarching occurs
+  - Ambient lighting remains active
+
+Shadow rays:
+- March in the +sunDir direction.
+
+---------------------------------------------------
+7. SHADOW RAY TERMINATION RULES
+---------------------------------------------------
+
+Ray traversal operates in voxel space.
+
+Ray terminates when:
+- A solid voxel is encountered.
+- Maximum ray length (in voxel steps) is exceeded.
+- Ray exits vertical bounds (y < 0 or y ≥ 256).
+
+Distances are measured in voxel steps, not world units.
+
+---------------------------------------------------
+8. UPDATE AND SYNCHRONIZATION RULES
+---------------------------------------------------
+
+Chunk updates:
+- A chunk is the atomic unit of update.
+
+Rule:
+- Chunk mesh data and chunk voxel data must be updated together.
+- There must never be a frame where:
+  - geometry is new but voxel data is old
+  - voxel data is new but geometry is old
+
+Dirty chunks:
+- Any block change invalidates both mesh and voxel representation.
+- Neighbor chunks are also invalidated when edge voxels change.
+
+---------------------------------------------------
+9. EXPLICIT NON-GOALS FOR PHASE 0
+---------------------------------------------------
+
+Phase 0 does NOT include:
+- Shader changes
+- Raymarching logic
+- Lighting changes
+- Performance optimizations
+- Quality improvements
+
+This document exists solely to remove ambiguity and
+lock down engine invariants.
+
+---------------------------------------------------
+END OF CONTRACT
+---------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Cool — shader-only DDA is the right call for what you care about (reliability + staying in sync).
+
+Phase 2 starts with a small “design lock” (like Phase 0), then we implement in tight increments so it can’t drift out of alignment again.
+
+A quick note: some of the files you uploaded earlier are no longer available on my side, so to patch Phase 2 cleanly you’ll need to re-upload the relevant ones.
+
+Phase 2 plan (high-level, no code yet)
+
+Phase 2.0: Define the ray + coordinate spaces (lock-in)
+
+Ray start: per-fragment world position (derived from chunk-local vLocalPos + uModel).
+
+Ray direction: -normalize(uSunDir) if uSunDir points from world toward the sun (we’ll follow your existing convention).
+
+Voxel coordinate space used for marching: world voxel coordinates (integers).
+
+“Solid?” query: sample chunk-local uVoxelOcc for the current chunk, and if the ray exits the chunk we sample neighbor chunks (we can stage this: same-chunk first, neighbors next).
+
+Phase 2.1: Implement same-chunk DDA (hard shadow)
+
+Only march within the current chunk bounds.
+
+If the ray leaves the chunk, treat as “unshadowed” for now (temporary, just to validate stepping).
+
+Output: a single scalar shadow = 0/1 that modulates your existing lighting.
+
+Phase 2.2: Extend to cross-chunk sampling (still hard shadow)
+
+Add a way for the shader to query neighbor chunks’ occupancy (this is the first real architectural decision in Phase 2).
+
+Most practical approach in your engine: a small “neighborhood” binding (3×3 chunk voxel textures + an index mapping), or a texture array/atlas. We’ll choose based on what your render loop can easily bind without exploding state changes.
+
+What I need you to re-upload to start Phase 2 (minimum set)
+
+Program.cs
+
+We need the world draw loop where we bind shaders and draw chunks.
+
+We’ll add a debug toggle for “DDA shadow visualization” that doesn’t affect normal visuals unless enabled.
+
+shader.vert and shader.frag
+
+We’ll add the DDA loop in shader.frag.
+
+We’ll ensure we have the exact varyings/uniforms we need (world position or enough to reconstruct it).
+
+MeshManager.cs
+
+We’ll set any new uniforms needed for DDA (chunk origin, maybe chunk coords).
+
+We’ll keep this extremely minimal.
+
+RenderChunk.cs
+
+If we need chunk coords (cx, cz) or a chunk origin, we either compute them from WorldPosition or add explicit fields (prefer compute first to avoid scope creep).
+
+Optional but helpful (only if needed for neighbor sampling later)
+
+VoxelWorld.cs or WorldManager.cs (only for understanding chunk indexing / visibility sets). For Phase 2.1 (same chunk), we can likely avoid touching them.
+
+Next concrete step
+
+Re-upload:
+
+Program.cs
+
+shader.vert
+
+shader.frag
+
+MeshManager.cs
+
+RenderChunk.cs
+
+Once you send those, we’ll implement Phase 2.1 first: same-chunk DDA with a hard max-step limit and a debug view so you can visually confirm the ray stepping is correct before we even think about neighbor chunks.

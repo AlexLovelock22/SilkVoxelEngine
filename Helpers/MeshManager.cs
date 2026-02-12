@@ -101,18 +101,86 @@ public static class MeshManager
     }
 
 
-    public static void ProcessUploadQueue(GL gl, List<RenderChunk> renderChunks, ConcurrentQueue<(Chunk chunk, (float[] opaque, float[] water) meshData)> queue)
+    // Modified ProcessUploadQueue in MeshManager.cs
+    public static void ProcessUploadQueue(GL gl, uint shadowTex, VoxelWorld world, List<RenderChunk> renderChunks, ConcurrentQueue<(Chunk chunk, (float[] opaque, float[] water) meshData)> queue)
     {
+        // Limit uploads per frame to prevent stuttering
         int uploadLimit = queue.Count > 100 ? 50 : 5;
+
         for (int i = 0; i < uploadLimit; i++)
         {
             if (queue.TryDequeue(out var data))
             {
+                // 1. Standard Mesh Upload (Handles the 3D visual blocks)
                 FinalizeGPUUpload(gl, renderChunks, data.chunk, data.meshData);
+
+                // 2. Step 1 Sync: Stitch height data into the CPU collage
+                world.StitchChunkToHeightmap(data.chunk);
+
+                // 3. Step 1 Sync: Stitch height data into the GPU Texture
+                UpdateHeightmapRegion(gl, shadowTex, data.chunk);
             }
             else break;
         }
     }
+
+    // Helper to update the specific 16x16 area of the global heightmap
+    public static unsafe void UpdateHeightmapRegion(GL gl, uint tex, Chunk chunk)
+    {
+        gl.BindTexture(TextureTarget.Texture2D, tex);
+
+        int worldStartX = chunk.ChunkX * Chunk.Size;
+        int worldStartZ = chunk.ChunkZ * Chunk.Size;
+
+        // The current mapping logic
+        int mapX = ((worldStartX + 512) % 1024 + 1024) % 1024;
+        int mapZ = ((worldStartZ + 512) % 1024 + 1024) % 1024;
+
+        // --- ENHANCED LOGGING ---
+        // We log every chunk update to see if two different chunks claim the same mapX/mapZ
+        if (Math.Abs(chunk.ChunkX) <= 2 && Math.Abs(chunk.ChunkZ) <= 2)
+        {
+            Console.WriteLine($"[Render] Chunk({chunk.ChunkX:D2},{chunk.ChunkZ:D2}) -> MapPos({mapX:D4},{mapZ:D4})");
+        }
+
+        int[,] localMap = chunk.GetHeightMap();
+        byte[] slice = new byte[Chunk.Size * Chunk.Size];
+        for (int z = 0; z < Chunk.Size; z++)
+        {
+            for (int x = 0; x < Chunk.Size; x++)
+            {
+                slice[z * Chunk.Size + x] = (byte)localMap[x, z];
+            }
+        }
+
+        fixed (byte* p = slice)
+        {
+            gl.TexSubImage2D(TextureTarget.Texture2D, 0, mapX, mapZ, (uint)Chunk.Size, (uint)Chunk.Size, PixelFormat.Red, PixelType.UnsignedByte, p);
+        }
+    }
+
+
+    public static unsafe uint CreateGlobalHeightmap(GL gl)
+    {
+        uint tex = gl.GenTexture();
+        gl.BindTexture(TextureTarget.Texture2D, tex);
+
+        // Initialize 1024x1024 R8 texture (1 byte per pixel)
+        gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.R8, 1024, 1024, 0, PixelFormat.Red, PixelType.UnsignedByte, null);
+
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+
+        // Repeat is critical for the "Infinite Wrapping" logic
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.Repeat);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.Repeat);
+
+        return tex;
+    }
+
+
+
+
 
 
 }
