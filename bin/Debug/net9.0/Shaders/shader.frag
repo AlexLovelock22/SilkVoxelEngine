@@ -2,55 +2,49 @@
 
 in vec3 vNormal;
 in vec3 vWorldPos;
-in vec2 vTexCoord; // Standard texture coordinates from your vertex shader
+in vec2 vTexCoord; 
 out vec4 FragColor;
 
-uniform sampler2D uTexture;   // Your block textures (Grass, Stone, etc.)
-uniform sampler2D uHeightmap; // Your 1024x1024 heightmap
+uniform sampler2D uTexture;   
+uniform sampler2D uHeightmap; 
 uniform vec3 uSunDir;
 
-// Accurate lookup using the 512-offset and 1024-wrap
 float GetHeight(vec2 worldXZ) {
     vec2 uv = (worldXZ + 512.0) / 1024.0;
     return texture(uHeightmap, uv).r * 255.0;
 }
 
-void main() {
-    // Early exit for night
-    if (uSunDir.y <= 0.05) { 
-        vec4 nightColor = texture(uTexture, vTexCoord) * 0.15;
-        FragColor = vec4(nightColor.rgb, 1.0);
-        return; 
+float CalculateShadow(vec3 lightDir, vec3 worldPos, vec3 normal) {
+    // 1. BACKFACE CHECK: 
+    // If the face is pointing away from the light, it's 100% in shadow.
+    // This fixes the 'missing shadow' on side faces.
+    if (dot(normal, lightDir) < 0.0) {
+        return 0.45;
     }
 
-    vec3 rayDir = normalize(uSunDir);
-    // Offset to prevent surface acne
-    vec3 rayPos = vWorldPos + (vNormal * 0.05);
-    float baseHeight = GetHeight(vWorldPos.xz);
+    vec3 rayDir = normalize(lightDir);
+    vec3 rayPos = worldPos + (normal * 0.05);
+    vec2 startBlock = floor(worldPos.xz);
+    float baseHeight = GetHeight(worldPos.xz);
 
-    // DDA SETUP
     vec3 mapPos = floor(rayPos);
     vec3 deltaDist = abs(vec3(1.0) / rayDir);
     vec3 rayStep = sign(rayDir);
     vec3 sideDist = (rayStep * (mapPos - rayPos) + (rayStep * 0.5) + 0.5) * deltaDist;
 
-    float shadow = 1.0;
     float totalDist = 0.0;
 
-    // The DDA Loop (Optimized for sharp shadows)
-    for (int i = 0; i < 120; i++) {
+    for (int i = 0; i < 100; i++) {
         float h = GetHeight(mapPos.xz);
-        float currentRayY = vWorldPos.y + (rayDir.y * totalDist);
+        float currentRayY = worldPos.y + (rayDir.y * totalDist);
 
         if (h + 1.0 > currentRayY) {
-            // Ignore the block the ray is currently on
-            if (!(h <= baseHeight + 0.1 && vNormal.y > 0.5)) {
-                shadow = 0.45; // Fixed shadow darkness
-                break;
+            bool isStartBlock = (floor(mapPos.xz) == startBlock);
+            if (!isStartBlock && !(h <= baseHeight + 0.1 && normal.y > 0.5)) {
+                return 0.45; 
             }
         }
 
-        // Stepping to next grid boundary
         if (sideDist.x < sideDist.y) {
             if (sideDist.x < sideDist.z) {
                 totalDist = sideDist.x;
@@ -72,14 +66,31 @@ void main() {
                 mapPos.z += rayStep.z;
             }
         }
-        if (currentRayY > 255.0) break;
+        if (currentRayY > 255.0 || currentRayY < 0.0) break;
+    }
+    return 1.0;
+}
+
+void main() {
+    vec4 texColor = texture(uTexture, vTexCoord);
+    float shadow = 1.0;
+    float ambient = 0.2;
+    float intensity = 0.8;
+
+    if (uSunDir.y > 0.05) {
+        // Sun Shadowing
+        shadow = CalculateShadow(uSunDir, vWorldPos, vNormal);
+    } else {
+        // Moon Shadowing
+        vec3 moonDir = normalize(-uSunDir);
+        float moonShadow = CalculateShadow(moonDir, vWorldPos, vNormal);
+        shadow = (moonShadow < 1.0) ? 0.7 : 1.0; 
+        ambient = 0.1;
+        intensity = 0.3;
     }
 
-    // Combine Everything
-    vec4 texColor = texture(uTexture, vTexCoord);
-    float diffuse = max(dot(vNormal, rayDir), 0.0);
+    // Combine everything into a flat, shaded look
+    vec3 finalRGB = texColor.rgb * (ambient + shadow * intensity);
     
-    // Final shading calculation: Texture * (Ambient + (Diffuse * BinaryShadow))
-    vec3 finalRGB = texColor.rgb * (0.2 + diffuse * shadow);
     FragColor = vec4(finalRGB, 1.0);
 }
