@@ -2,27 +2,33 @@
 
 in vec3 vNormal;
 in vec3 vWorldPos;
+in vec2 vTexCoord; // Standard texture coordinates from your vertex shader
 out vec4 FragColor;
 
-uniform sampler2D uHeightmap;
+uniform sampler2D uTexture;   // Your block textures (Grass, Stone, etc.)
+uniform sampler2D uHeightmap; // Your 1024x1024 heightmap
 uniform vec3 uSunDir;
 
+// Accurate lookup using the 512-offset and 1024-wrap
 float GetHeight(vec2 worldXZ) {
-    // We stick to the standard UV mapping matching your 1024 wrap
     vec2 uv = (worldXZ + 512.0) / 1024.0;
     return texture(uHeightmap, uv).r * 255.0;
 }
 
 void main() {
-    // Early exit for night/sunset
-    if (uSunDir.y <= 0.05) { FragColor = vec4(vec3(0.1), 1.0); return; }
+    // Early exit for night
+    if (uSunDir.y <= 0.05) { 
+        vec4 nightColor = texture(uTexture, vTexCoord) * 0.15;
+        FragColor = vec4(nightColor.rgb, 1.0);
+        return; 
+    }
 
     vec3 rayDir = normalize(uSunDir);
-    // Tiny offset to prevent the surface from shadowing itself
+    // Offset to prevent surface acne
     vec3 rayPos = vWorldPos + (vNormal * 0.05);
     float baseHeight = GetHeight(vWorldPos.xz);
 
-    // DDA Setup
+    // DDA SETUP
     vec3 mapPos = floor(rayPos);
     vec3 deltaDist = abs(vec3(1.0) / rayDir);
     vec3 rayStep = sign(rayDir);
@@ -31,22 +37,20 @@ void main() {
     float shadow = 1.0;
     float totalDist = 0.0;
 
-    // Standard DDA loop for performance
+    // The DDA Loop (Optimized for sharp shadows)
     for (int i = 0; i < 120; i++) {
         float h = GetHeight(mapPos.xz);
         float currentRayY = vWorldPos.y + (rayDir.y * totalDist);
 
-        // SHARP CHECK: If the height at this grid cell is above the ray, it's a shadow.
-        // Adding 1.0 because the heightmap represents the floor of the block.
         if (h + 1.0 > currentRayY) {
-            // Ensure we aren't hitting the block we are standing on
+            // Ignore the block the ray is currently on
             if (!(h <= baseHeight + 0.1 && vNormal.y > 0.5)) {
-                shadow = 0.4; // Binary shadow value (no blurring math)
+                shadow = 0.45; // Fixed shadow darkness
                 break;
             }
         }
 
-        // Stepping logic
+        // Stepping to next grid boundary
         if (sideDist.x < sideDist.y) {
             if (sideDist.x < sideDist.z) {
                 totalDist = sideDist.x;
@@ -68,14 +72,14 @@ void main() {
                 mapPos.z += rayStep.z;
             }
         }
-        
-        // Break if ray goes into space
         if (currentRayY > 255.0) break;
     }
 
+    // Combine Everything
+    vec4 texColor = texture(uTexture, vTexCoord);
     float diffuse = max(dot(vNormal, rayDir), 0.0);
-    vec3 color = vec3(0.2, 0.5, 0.1); // Base grass color
     
-    // Apply lighting and shadow
-    FragColor = vec4(color * (0.15 + diffuse * shadow), 1.0);
+    // Final shading calculation: Texture * (Ambient + (Diffuse * BinaryShadow))
+    vec3 finalRGB = texColor.rgb * (0.2 + diffuse * shadow);
+    FragColor = vec4(finalRGB, 1.0);
 }
