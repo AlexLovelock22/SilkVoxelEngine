@@ -15,12 +15,16 @@ float GetHeight(vec2 worldXZ) {
 }
 
 float CalculateShadow(vec3 lightDir, vec3 worldPos, vec3 normal) {
-    // 1. BACKFACE CHECK: 
-    // If the face is pointing away from the light, it's 100% in shadow.
-    // This fixes the 'missing shadow' on side faces.
-    if (dot(normal, lightDir) < 0.0) {
-        return 0.45;
-    }
+    float dotNL = dot(normal, lightDir);
+    
+    // MINECRAFT MIDDAY SOFTNESS:
+    // We use a wide window (-0.4 to 0.4). 
+    // This ensures that when the sun is near the top (11:15am - 12:45pm), 
+    // side faces (where dotNL is near 0) stay in a "mid-shade" state (around 0.7-0.8).
+    float faceShadow = clamp(smoothstep(-0.4, 0.4, dotNL), 0.45, 1.0);
+    
+    // If the face is definitely pointing away, it's fully in shadow.
+    if (dotNL <= -0.4) return 0.45;
 
     vec3 rayDir = normalize(lightDir);
     vec3 rayPos = worldPos + (normal * 0.05);
@@ -33,6 +37,7 @@ float CalculateShadow(vec3 lightDir, vec3 worldPos, vec3 normal) {
     vec3 sideDist = (rayStep * (mapPos - rayPos) + (rayStep * 0.5) + 0.5) * deltaDist;
 
     float totalDist = 0.0;
+    float ddaShadow = 1.0;
 
     for (int i = 0; i < 100; i++) {
         float h = GetHeight(mapPos.xz);
@@ -41,7 +46,8 @@ float CalculateShadow(vec3 lightDir, vec3 worldPos, vec3 normal) {
         if (h + 1.0 > currentRayY) {
             bool isStartBlock = (floor(mapPos.xz) == startBlock);
             if (!isStartBlock && !(h <= baseHeight + 0.1 && normal.y > 0.5)) {
-                return 0.45; 
+                ddaShadow = 0.45; 
+                break;
             }
         }
 
@@ -68,29 +74,35 @@ float CalculateShadow(vec3 lightDir, vec3 worldPos, vec3 normal) {
         }
         if (currentRayY > 255.0 || currentRayY < 0.0) break;
     }
-    return 1.0;
+    
+    return min(faceShadow, ddaShadow);
 }
 
 void main() {
     vec4 texColor = texture(uTexture, vTexCoord);
-    float shadow = 1.0;
-    float ambient = 0.2;
-    float intensity = 0.8;
+    
+    // DIRECTIONAL BIAS (Permanent axis-based shading)
+    float directionalWeight = 1.0;
+    if (abs(vNormal.y) > 0.9) directionalWeight = 1.0;       // Top (Brightest)
+    else if (abs(vNormal.z) > 0.9) directionalWeight = 0.8;  // North/South (Shaded)
+    else if (abs(vNormal.x) > 0.9) directionalWeight = 0.9;  // East/West (Semi-Bright)
 
-    if (uSunDir.y > 0.05) {
-        // Sun Shadowing
-        shadow = CalculateShadow(uSunDir, vWorldPos, vNormal);
+    float shadow = 1.0;
+    float ambient = 0.25; 
+    float intensity = 0.75;
+
+    if (uSunDir.y > 0.0) {
+        shadow = CalculateShadow(normalize(uSunDir), vWorldPos, vNormal);
     } else {
-        // Moon Shadowing
         vec3 moonDir = normalize(-uSunDir);
         float moonShadow = CalculateShadow(moonDir, vWorldPos, vNormal);
-        shadow = (moonShadow < 1.0) ? 0.7 : 1.0; 
-        ambient = 0.1;
-        intensity = 0.3;
+        shadow = mix(0.7, 1.0, (moonShadow - 0.45) / 0.55);
+        ambient = 0.15;
+        intensity = 0.25;
     }
 
-    // Combine everything into a flat, shaded look
-    vec3 finalRGB = texColor.rgb * (ambient + shadow * intensity);
+    // Multiply texture by the combined light factors
+    vec3 finalRGB = texColor.rgb * (ambient + (shadow * intensity)) * directionalWeight;
     
     FragColor = vec4(finalRGB, 1.0);
 }

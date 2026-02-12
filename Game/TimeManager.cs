@@ -29,24 +29,29 @@ public class TimeManager
     {
         TotalTicks++;
         UpdateSunPosition();
-
-        // Future home for: 
-        // if (TotalTicks % 100 == 0) DoRandomCropGrowth();
     }
+
     private void UpdateSunPosition()
     {
-        float angle = (DayProgress * MathF.PI * 2.0f) - (MathF.PI / 2.0f);
+        // 1. Calculate the Angle (0 to 2PI)
+        // Subtracting PI/2 ensures the sun starts at the horizon (Dawn)
+        float dayAngle = (DayProgress * MathF.PI * 2.0f) - (MathF.PI / 2.0f);
 
-        float x = MathF.Cos(angle);
-        float y = MathF.Sin(angle);
+        // 2. Simplified Minecraft-style Orbit
+        // X moves East to West
+        // Y moves Up and Down
+        // Z is 0.0 so it travels in a perfectly straight line overhead
+        float x = MathF.Cos(dayAngle);
+        float y = MathF.Sin(dayAngle);
+        float z = 0.0f; 
 
-        // We increase the Z-tilt to 0.4f to emphasize those diagonal lines you fixed.
-        // Clamping Y to 0.02f prevents the ray from going parallel to the floor (infinite shadow).
-        SunDirection = Vector3.Normalize(new Vector3(x, MathF.Max(y, 0.02f), 0.4f));
-
-        if (TotalTicks % 1000 == 0)
+        // 3. Small Y-bias for shadow stability
+        float finalY = y;
+        if (MathF.Abs(y) < 0.02f)
         {
-            Console.WriteLine($"[TIME] Progress: {DayProgress:F2} | SunDir: {SunDirection.X:F2}, {SunDirection.Y:F2}, {SunDirection.Z:F2}");
+            finalY = (y >= 0) ? 0.02f : -0.02f;
         }
+
+        SunDirection = Vector3.Normalize(new Vector3(x, finalY, z));
     }
 }
