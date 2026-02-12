@@ -35,16 +35,14 @@ public class TimeManager
     }
     private void UpdateSunPosition()
     {
-        // The angle moves the sun from East to West
         float angle = (DayProgress * MathF.PI * 2.0f) - (MathF.PI / 2.0f);
 
         float x = MathF.Cos(angle);
         float y = MathF.Sin(angle);
 
-        // THE FIX: Increased the Z-axis tilt to 0.5f to force diagonal light rays.
-        // Also ensuring Y doesn't go too far below the horizon during tests.
-        Vector3 rawDir = new Vector3(x, MathF.Max(y, -0.2f), 0.5f);
-        SunDirection = Vector3.Normalize(rawDir);
+        // We increase the Z-tilt to 0.4f to emphasize those diagonal lines you fixed.
+        // Clamping Y to 0.02f prevents the ray from going parallel to the floor (infinite shadow).
+        SunDirection = Vector3.Normalize(new Vector3(x, MathF.Max(y, 0.02f), 0.4f));
 
         if (TotalTicks % 1000 == 0)
         {

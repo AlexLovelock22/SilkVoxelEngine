@@ -114,24 +114,28 @@ public class VoxelWorld
 
 
     public void StitchChunkToHeightmap(Chunk chunk)
-{
-    int[,] localMap = chunk.GetHeightMap();
-    if (localMap[8, 8] == 0 && localMap[0, 0] == 0) return;
-
-    int worldStartX = chunk.ChunkX * Chunk.Size;
-    int worldStartZ = chunk.ChunkZ * Chunk.Size;
-
-    for (int z = 0; z < Chunk.Size; z++)
     {
-        for (int x = 0; x < Chunk.Size; x++)
-        {
-            // This coordinate logic is mirrored in our new shader's GetHeight function
-            int mX = (((worldStartX + x) + 512) % 1024 + 1024) % 1024;
-            int mZ = (((worldStartZ + z) + 512) % 1024 + 1024) % 1024;
+        int[,] localMap = chunk.GetHeightMap();
 
-            _globalHeightmapData[mZ * 1024 + mX] = (byte)localMap[x, z];
+        // Ensure we don't stitch half-baked chunks
+        if (localMap[8, 8] == 0 && localMap[0, 0] == 0) return;
+
+        int worldStartX = chunk.ChunkX * Chunk.Size;
+        int worldStartZ = chunk.ChunkZ * Chunk.Size;
+
+        for (int z = 0; z < Chunk.Size; z++)
+        {
+            for (int x = 0; x < Chunk.Size; x++)
+            {
+                // This 1024-unit wrapping is what prevents the ray from "snapping" 
+                // at world boundaries, as long as the shader mirrors it.
+                int mX = (((worldStartX + x) + 512) % 1024 + 1024) % 1024;
+                int mZ = (((worldStartZ + z) + 512) % 1024 + 1024) % 1024;
+
+                _globalHeightmapData[mZ * 1024 + mX] = (byte)localMap[x, z];
+            }
         }
+
+        _heightmapNeedsUpdate = true;
     }
-    _heightmapNeedsUpdate = true;
-}
 }
