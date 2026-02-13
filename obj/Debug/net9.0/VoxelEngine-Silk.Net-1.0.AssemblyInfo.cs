@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("VoxelEngine-Silk.Net-1.0")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+da4730f4f7fc10d40be6dd71ed94124848fc4f4b")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+c17933371d570dadab24c992f26bbe4ee5cfc612")]
 [assembly: System.Reflection.AssemblyProductAttribute("VoxelEngine-Silk.Net-1.0")]
 [assembly: System.Reflection.AssemblyTitleAttribute("VoxelEngine-Silk.Net-1.0")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
