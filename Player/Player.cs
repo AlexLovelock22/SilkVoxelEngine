@@ -26,7 +26,7 @@ public class Player
 
     private const float GRAVITY = -25f;
     private const float JUMP_FORCE = 8.5f;
-    private const float WALK_SPEED = 10.0f;
+    private const float WALK_SPEED = 50.0f;
 
     private float _interactionCooldown = 0f;
     private const float COOLDOWN_TIME = 0.2f;
@@ -92,7 +92,7 @@ public class Player
         UpdateCameraVectors();
         Vector3 moveDir = GetInputDirection(keyboard);
 
-        float currentMaxSpeed = IsFlying ? 20.0f : (WALK_SPEED * 1.6f);
+        float currentMaxSpeed = IsFlying ? 60.0f : (WALK_SPEED * 1.6f);
         float swimSpeed = WALK_SPEED * 0.85f; // Slightly increased swim speed as requested
 
         // 3. Apply Vertical Physics
