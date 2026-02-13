@@ -77,6 +77,7 @@ public class VoxelWorld
     }
 
     // Inside VoxelWorld.cs
+    // Inside VoxelWorld.cs
     public void SetBlock(int x, int y, int z, byte type)
     {
         int cx = (int)Math.Floor(x / (float)Chunk.Size);
@@ -89,12 +90,38 @@ public class VoxelWorld
 
             if (y >= 0 && y < Chunk.Height)
             {
+                // 1. Update the 3D block data
                 chunk.Blocks[lx, y, lz] = type;
-                chunk.IsDirty = true; // Tell the game to rebuild this mesh
 
-                // EDGE CASE: If you break a block on the border of a chunk, 
-                // the neighbor chunk also needs to update its visible faces!
+                // 2. Update the internal HeightMap array immediately
+                int[,] heightData = chunk.GetHeightMap();
+                if (type != 0) // Block Placed (Assuming 0 is Air)
+                {
+                    if (y > heightData[lx, lz])
+                    {
+                        heightData[lx, lz] = y;
+                    }
+                }
+                else // Block Mined
+                {
+                    // If we broke the block that was the highest, scan down to find the new surface
+                    if (y == heightData[lx, lz])
+                    {
+                        int searchY = y;
+                        while (searchY > 0 && chunk.Blocks[lx, searchY, lz] == 0)
+                        {
+                            searchY--;
+                        }
+                        heightData[lx, lz] = searchY;
+                    }
+                }
+
+                // 3. Mark for re-meshing and neighbor updates
+                chunk.IsDirty = true;
                 UpdateNeighborIfEdge(x, y, z, lx, lz, cx, cz);
+
+                // 4. Update the global CPU collage
+                StitchChunkToHeightmap(chunk);
             }
         }
     }

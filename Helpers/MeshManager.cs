@@ -73,6 +73,8 @@ public static class MeshManager
     }
 
 
+
+
     public static void DeleteMesh(GL gl, ref uint vao, ref uint vbo)
     {
         if (vao != 0) gl.DeleteVertexArray(vao);
@@ -102,23 +104,25 @@ public static class MeshManager
 
 
     // Modified ProcessUploadQueue in MeshManager.cs
+    // Inside MeshManager.cs
     public static void ProcessUploadQueue(GL gl, uint shadowTex, VoxelWorld world, List<RenderChunk> renderChunks, ConcurrentQueue<(Chunk chunk, (float[] opaque, float[] water) meshData)> queue)
     {
         // Limit uploads per frame to prevent stuttering
-        int uploadLimit = queue.Count > 100 ? 50 : 5;
+        int uploadLimit = queue.Count > 100 ? 50 : 10;
 
         for (int i = 0; i < uploadLimit; i++)
         {
             if (queue.TryDequeue(out var data))
             {
-                // 1. Standard Mesh Upload (Handles the 3D visual blocks)
+                // 1. Upload the new 3D geometry
                 FinalizeGPUUpload(gl, renderChunks, data.chunk, data.meshData);
 
-                // 2. Step 1 Sync: Stitch height data into the CPU collage
-                world.StitchChunkToHeightmap(data.chunk);
-
-                // 3. Step 1 Sync: Stitch height data into the GPU Texture
+                // 2. Upload the new 2D heightmap data to the GPU texture
+                // This is what prints your console logs and updates the shadows
                 UpdateHeightmapRegion(gl, shadowTex, data.chunk);
+
+                // 3. Clear the dirty flag as the GPU is now in sync
+                data.chunk.IsDirty = false;
             }
             else break;
         }
@@ -132,33 +136,46 @@ public static class MeshManager
         int worldStartX = chunk.ChunkX * Chunk.Size;
         int worldStartZ = chunk.ChunkZ * Chunk.Size;
 
-        // The current mapping logic
+        // Mapping logic
         int mapX = ((worldStartX + 512) % 1024 + 1024) % 1024;
         int mapZ = ((worldStartZ + 512) % 1024 + 1024) % 1024;
 
-        // --- ENHANCED LOGGING ---
-        // We log every chunk update to see if two different chunks claim the same mapX/mapZ
-        if (Math.Abs(chunk.ChunkX) <= 2 && Math.Abs(chunk.ChunkZ) <= 2)
-        {
-            Console.WriteLine($"[Render] Chunk({chunk.ChunkX:D2},{chunk.ChunkZ:D2}) -> MapPos({mapX:D4},{mapZ:D4})");
-        }
-
         int[,] localMap = chunk.GetHeightMap();
         byte[] slice = new byte[Chunk.Size * Chunk.Size];
+
+        // Tracking for logging
+        int minH = 255;
+        int maxH = 0;
+        long totalH = 0;
+
         for (int z = 0; z < Chunk.Size; z++)
         {
             for (int x = 0; x < Chunk.Size; x++)
             {
-                slice[z * Chunk.Size + x] = (byte)localMap[x, z];
+                byte val = (byte)localMap[x, z];
+                slice[z * Chunk.Size + x] = val;
+
+                // Stats for logging
+                if (val < minH) minH = val;
+                if (val > maxH) maxH = val;
+                totalH += val;
             }
         }
 
+        // --- ENHANCED LOGGING ---
+        // This will print the average height of the chunk. 
+        // If you mine a block, you should see 'Avg' or 'Max' decrease in the console.
+        float avg = totalH / (float)(Chunk.Size * Chunk.Size);
+        Console.WriteLine($"[Heightmap Update] Chunk({chunk.ChunkX},{chunk.ChunkZ}) " +
+                          $"at Tex({mapX},{mapZ}) | Min:{minH} Max:{maxH} Avg:{avg:F2}");
+
         fixed (byte* p = slice)
         {
-            gl.TexSubImage2D(TextureTarget.Texture2D, 0, mapX, mapZ, (uint)Chunk.Size, (uint)Chunk.Size, PixelFormat.Red, PixelType.UnsignedByte, p);
+            gl.TexSubImage2D(TextureTarget.Texture2D, 0, mapX, mapZ,
+                             (uint)Chunk.Size, (uint)Chunk.Size,
+                             PixelFormat.Red, PixelType.UnsignedByte, p);
         }
     }
-
 
     public static unsafe uint CreateGlobalHeightmap(GL gl)
     {
