@@ -121,6 +121,9 @@ class Program
         string fragmentCode = Path.Combine("Shaders", "shader.frag");
         Shader = ShaderManager.CreateShaderProgramFromFile(vertexCode, fragmentCode, Gl);
 
+
+        _timeManager.OnLoad();
+        
         // 4. Input and Background Tasks
         Stopwatch totalSw = Stopwatch.StartNew();
         InitShadowSystem();
