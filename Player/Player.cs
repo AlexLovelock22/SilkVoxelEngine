@@ -265,19 +265,19 @@ public class Player
 
 
     // Inside Player.cs
-    public void HandleInteraction(IInputContext input, VoxelWorld world, float deltaTime)
+    // Updated signature to accept GL and the texture handle
+    public void HandleInteraction(IInputContext input, VoxelWorld world, float deltaTime, Silk.NET.OpenGL.GL gl, uint voxelTex3D)
     {
         // 1. Decrease the timer by the time passed since last frame
         if (_interactionCooldown > 0)
         {
             _interactionCooldown -= deltaTime;
-            return; // Still cooling down, don't do anything
+            return;
         }
 
         var mouse = input.Mice[0];
         float reachDistance = 5.0f;
 
-        // Check for clicks
         bool leftClick = mouse.IsButtonPressed(MouseButton.Left);
         bool rightClick = mouse.IsButtonPressed(MouseButton.Right);
 
@@ -289,19 +289,20 @@ public class Player
             {
                 if (leftClick) // BREAK
                 {
-                    world.SetBlock((int)result.IntPos.X, (int)result.IntPos.Y, (int)result.IntPos.Z, (byte)BlockType.Air);
+                    // Pass gl and voxelTex3D to sync the 3D shadow grid
+                    world.SetBlock((int)result.IntPos.X, (int)result.IntPos.Y, (int)result.IntPos.Z, (byte)0, gl, voxelTex3D);
                 }
                 else if (rightClick) // PLACE
                 {
-                    // Simple collision check to avoid placing blocks inside yourself
                     if (!IsPositionInsidePlayer(result.PlacePos))
                     {
-                        world.SetBlock((int)result.PlacePos.X, (int)result.PlacePos.Y, (int)result.PlacePos.Z, (byte)BlockType.Dirt);
+                        // Pass gl and voxelTex3D to sync the 3D shadow grid
+                        world.SetBlock((int)result.PlacePos.X, (int)result.PlacePos.Y, (int)result.PlacePos.Z, (byte)1, gl, voxelTex3D);
                     }
                 }
 
-                // 2. Reset the timer after a successful action
-                _interactionCooldown = COOLDOWN_TIME;
+                // 2. Reset the timer
+                _interactionCooldown = 0.2f; // Assuming COOLDOWN_TIME
             }
         }
     }

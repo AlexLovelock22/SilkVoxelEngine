@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
+using VoxelEngine_Silk.Net_1._0.Helpers;
 
 namespace VoxelEngine_Silk.Net_1._0.World;
 
@@ -78,50 +79,29 @@ public class VoxelWorld
 
     // Inside VoxelWorld.cs
     // Inside VoxelWorld.cs
-    public void SetBlock(int x, int y, int z, byte type)
+    public void SetBlock(int x, int y, int z, byte type, Silk.NET.OpenGL.GL gl, uint voxelTex3D)
     {
-        int cx = (int)Math.Floor(x / (float)Chunk.Size);
-        int cz = (int)Math.Floor(z / (float)Chunk.Size);
+        int cx = (int)Math.Floor(x / 16.0);
+        int cz = (int)Math.Floor(z / 16.0);
 
         if (Chunks.TryGetValue((cx, cz), out var chunk))
         {
-            int lx = x - (cx * Chunk.Size);
-            int lz = z - (cz * Chunk.Size);
+            int lx = x - (cx * 16);
+            int lz = z - (cz * 16);
 
-            if (y >= 0 && y < Chunk.Height)
+            if (y >= 0 && y < 256)
             {
-                // 1. Update the 3D block data
                 chunk.Blocks[lx, y, lz] = type;
 
-                // 2. Update the internal HeightMap array immediately
-                int[,] heightData = chunk.GetHeightMap();
-                if (type != 0) // Block Placed (Assuming 0 is Air)
-                {
-                    if (y > heightData[lx, lz])
-                    {
-                        heightData[lx, lz] = y;
-                    }
-                }
-                else // Block Mined
-                {
-                    // If we broke the block that was the highest, scan down to find the new surface
-                    if (y == heightData[lx, lz])
-                    {
-                        int searchY = y;
-                        while (searchY > 0 && chunk.Blocks[lx, searchY, lz] == 0)
-                        {
-                            searchY--;
-                        }
-                        heightData[lx, lz] = searchY;
-                    }
-                }
+                // CRITICAL: We don't wait for the background thread for manual SetBlock!
+                // We update the 3D texture IMMEDIATELY so shadows and logic sync up.
+                int texX = ((x % 1024) + 1024) % 1024;
+                int texZ = ((z % 1024) + 1024) % 1024;
+                MeshManager.UpdateVoxelIn3DTexture(gl, voxelTex3D, texX, y, texZ, type);
 
-                // 3. Mark for re-meshing and neighbor updates
+                // Re-mesh this specific chunk immediately to stop "invisible collision"
                 chunk.IsDirty = true;
                 UpdateNeighborIfEdge(x, y, z, lx, lz, cx, cz);
-
-                // 4. Update the global CPU collage
-                StitchChunkToHeightmap(chunk);
             }
         }
     }
@@ -140,29 +120,29 @@ public class VoxelWorld
     }
 
 
-    public void StitchChunkToHeightmap(Chunk chunk)
-    {
-        int[,] localMap = chunk.GetHeightMap();
+    // public void StitchChunkToHeightmap(Chunk chunk)
+    // {
+    //     int[,] localMap = chunk.GetHeightMap();
 
-        // Ensure we don't stitch half-baked chunks
-        if (localMap[8, 8] == 0 && localMap[0, 0] == 0) return;
+    //     // Ensure we don't stitch half-baked chunks
+    //     if (localMap[8, 8] == 0 && localMap[0, 0] == 0) return;
 
-        int worldStartX = chunk.ChunkX * Chunk.Size;
-        int worldStartZ = chunk.ChunkZ * Chunk.Size;
+    //     int worldStartX = chunk.ChunkX * Chunk.Size;
+    //     int worldStartZ = chunk.ChunkZ * Chunk.Size;
 
-        for (int z = 0; z < Chunk.Size; z++)
-        {
-            for (int x = 0; x < Chunk.Size; x++)
-            {
-                // This 1024-unit wrapping is what prevents the ray from "snapping" 
-                // at world boundaries, as long as the shader mirrors it.
-                int mX = (((worldStartX + x) + 512) % 1024 + 1024) % 1024;
-                int mZ = (((worldStartZ + z) + 512) % 1024 + 1024) % 1024;
+    //     for (int z = 0; z < Chunk.Size; z++)
+    //     {
+    //         for (int x = 0; x < Chunk.Size; x++)
+    //         {
+    //             // This 1024-unit wrapping is what prevents the ray from "snapping" 
+    //             // at world boundaries, as long as the shader mirrors it.
+    //             int mX = (((worldStartX + x) + 512) % 1024 + 1024) % 1024;
+    //             int mZ = (((worldStartZ + z) + 512) % 1024 + 1024) % 1024;
 
-                _globalHeightmapData[mZ * 1024 + mX] = (byte)localMap[x, z];
-            }
-        }
+    //             _globalHeightmapData[mZ * 1024 + mX] = (byte)localMap[x, z];
+    //         }
+    //     }
 
-        _heightmapNeedsUpdate = true;
-    }
+    //     _heightmapNeedsUpdate = true;
+    // }
 }

@@ -17,7 +17,7 @@ namespace VoxelEngine_Silk.Net_1._0;
 
 class Program
 {
-    private static ConcurrentQueue<(Chunk chunk, (float[] opaque, float[] water) meshData)> _uploadQueue = new();
+    private static ConcurrentQueue<(Chunk chunk, (float[] opaque, float[] water) meshData, byte[] volumeData)> _uploadQueue = new();
     private static ConcurrentQueue<(int x, int z)> _unloadQueue = new();
     private static IWindow window = null!;
     private static GL Gl = null!;
@@ -54,6 +54,7 @@ class Program
     private static QuadMesh _quadMesh = null!;
     private static WorldManager _worldManager = null!;
     private static uint _globalHeightmapTexture;
+    private static uint _globalVoxelTexture;
 
     static void Main(string[] args)
     {
@@ -123,22 +124,24 @@ class Program
 
 
         _timeManager.OnLoad();
-        
+
         // 4. Input and Background Tasks
         Stopwatch totalSw = Stopwatch.StartNew();
         InitShadowSystem();
         // Fix CS0103: Initialize the _worldManager field
         _worldManager = new WorldManager(voxelWorld, _unloadQueue, (chunk) =>
-        {
-            Task.Run(() =>
-            {
-                // Fix CS0103/CS1503: Use the correct method name 'FillVertexData' from the Chunk class
-                // This returns the (float[] opaque, float[] water) tuple expected by _uploadQueue
-                var meshData = chunk.FillVertexData();
-                _uploadQueue.Enqueue((chunk, meshData));
-                chunk.IsDirty = false;
-            });
-        });
+{
+    Task.Run(() =>
+    {
+        var meshData = chunk.FillVertexData();
+
+        // PRE-CALCULATE the 3D byte array here on the background thread!
+        // This takes the "computing" load off the main thread.
+        byte[] volumeData = PrecomputeVolumeData(chunk);
+
+        _uploadQueue.Enqueue((chunk, meshData, volumeData));
+    });
+});
 
         // Start the streaming thread via the manager helper
         _worldManager.StartStreaming(() => player.GetEyePosition());
@@ -154,9 +157,11 @@ class Program
     }
 
 
+    // Inside your main Program or initialization class
     private static void InitShadowSystem()
     {
-        _globalHeightmapTexture = MeshManager.CreateGlobalHeightmap(Gl);
+        // Replaces CreateGlobalHeightmap with the 3D version
+        _globalVoxelTexture = MeshManager.CreateVoxel3DTexture(Gl);
     }
 
     // Call this in OnUpdate to process the queue
@@ -214,15 +219,15 @@ class Program
         int texLoc = Gl.GetUniformLocation(Shader, "uTexture");
         if (texLoc != -1) Gl.Uniform1(texLoc, 0);
 
-        // --- Unit 1: Global Heightmap ---
+        // --- Unit 1: 3D Voxel Texture (Replaces Global Heightmap) ---
         Gl.ActiveTexture(TextureUnit.Texture1);
-        Gl.BindTexture(TextureTarget.Texture2D, _globalHeightmapTexture);
-        int heightLoc = Gl.GetUniformLocation(Shader, "uHeightmap");
-        if (heightLoc != -1) Gl.Uniform1(heightLoc, 1);
+        Gl.BindTexture(TextureTarget.Texture3D, _globalVoxelTexture);
+        // Updated uniform name to match 3D logic
+        int voxelLoc = Gl.GetUniformLocation(Shader, "uVoxelGrid");
+        if (voxelLoc != -1) Gl.Uniform1(voxelLoc, 1);
 
-        // Inside OnRender
         Gl.Uniform3(Gl.GetUniformLocation(Shader, "uSunDir"), sunDir.X, sunDir.Y, sunDir.Z);
-        
+
         MeshManager.SetUniformMatrix(Gl, Shader, "uView", view);
         MeshManager.SetUniformMatrix(Gl, Shader, "uProjection", projection);
 
@@ -234,7 +239,6 @@ class Program
             if (rc.OpaqueVertexCount == 0) continue;
             if (!_frustum.IsBoxVisible(rc.WorldPosition, rc.WorldPosition + new Vector3(16, 256, 16))) continue;
 
-            // Anchor the chunk for the shader math
             int worldPosLoc = Gl.GetUniformLocation(Shader, "uChunkWorldPos");
             if (worldPosLoc != -1) Gl.Uniform3(worldPosLoc, rc.WorldPosition.X, rc.WorldPosition.Y, rc.WorldPosition.Z);
 
@@ -270,7 +274,8 @@ class Program
             Gl.Disable(EnableCap.PolygonOffsetLine);
         }
 
-        DebugDrawHeightmap();
+        // Note: DebugDrawHeightmap is now omitted or would need logic to visualize a 3D slice
+        // DebugDrawVoxelSlice(); 
 
         // --- PASS 5: UI ---
         Gl.Disable(EnableCap.DepthTest);
@@ -280,30 +285,54 @@ class Program
         Gl.DepthMask(true);
     }
 
+    private static byte[] PrecomputeVolumeData(Chunk chunk)
+    {
+        byte[] data = new byte[16 * 256 * 16];
+        for (int z = 0; z < 16; z++)
+        {
+            for (int y = 0; y < 256; y++)
+            {
+                for (int x = 0; x < 16; x++)
+                {
+                    if (chunk.Blocks[x, y, z] > 0)
+                    {
+                        // OpenGL Data Layout: X then Y then Z
+                        int index = x + (y * 16) + (z * 16 * 256);
+                        data[index] = 255;
+                    }
+                }
+            }
+        }
+        return data;
+    }
+
+    // 2. Updated OnUpdate to handle unloading properly
     private static void OnUpdate(double deltaTime)
     {
         var keyboard = Input.Keyboards[0];
 
-        // 1. Process unloads
+        // Clean up GPU meshes for unloaded chunks
         _worldManager.ProcessUnloadQueue(Gl, _renderChunks);
+
+        // NEW: We also need to clear the 3D texture area for unloaded chunks 
+        // so old shadows don't stay floating in the air!
+        while (_unloadQueue.TryDequeue(out var coords))
+        {
+            MeshManager.ClearChunkInVoxelTexture(Gl, _globalVoxelTexture, coords.x, coords.z);
+        }
 
         _timeManager.Update(deltaTime);
 
-        // 2. Fixed CS7036: Pass the shadow texture and world reference
-        MeshManager.ProcessUploadQueue(Gl, _globalHeightmapTexture, voxelWorld, _renderChunks, _uploadQueue);
+        // Increase this slightly (e.g., 2 or 3) if generation is too slow
+        MeshManager.ProcessUploadQueue(Gl, _globalVoxelTexture, _renderChunks, _uploadQueue);
 
         player.Update(deltaTime, keyboard, voxelWorld);
-        player.HandleInteraction(Input, voxelWorld, (float)deltaTime);
+        player.HandleInteraction(Input, voxelWorld, (float)deltaTime, Gl, _globalVoxelTexture);
 
-        // 3. Handle dirty chunks
         _worldManager.UpdateDirtyChunks();
-
-        UpdatePerformanceCounters(deltaTime);
-
-        if (keyboard.IsKeyPressed(Key.Escape)) window.Close();
     }
 
-    private static void DebugDrawHeightmap()
+    private static void DebugDrawVoxelSlice()
     {
         Gl.Disable(GLEnum.DepthTest);
         Gl.Disable(GLEnum.CullFace);
@@ -312,25 +341,20 @@ class Program
 
         Gl.UseProgram(_spriteShader);
 
-        // 1. Force Texture Parameters to be "Flat"
-        // This stops the GPU from trying to 'smooth' or 'wrap' the pixels which causes the bulging look
         Gl.ActiveTexture(TextureUnit.Texture0);
-        Gl.BindTexture(TextureTarget.Texture2D, _globalHeightmapTexture);
-        Gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
-        Gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
-        Gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
-        Gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+        // Note: To debug a 3D texture as a 2D sprite, your sprite shader 
+        // would need to be updated to handle sampler3D and a 'Z' (height) coordinate.
+        // For now, we bind the 3D texture.
+        Gl.BindTexture(TextureTarget.Texture3D, _globalVoxelTexture);
+
+        Gl.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
+        Gl.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
 
         int texLoc = Gl.GetUniformLocation(_spriteShader, "uTexture");
         if (texLoc != -1) Gl.Uniform1(texLoc, 0);
 
-        // 2. Linear Projection
-        // Ensure we are using a screen-space ortho projection so 1 pixel = 1 unit
         var projection = Matrix4x4.CreateOrthographicOffCenter(0, window.Size.X, window.Size.Y, 0, -1, 1);
 
-        // 3. Simple Transform
-        // We scale by 256 and move it to the top left. 
-        // If it looks "bulged", your _quadMesh might have its UVs mapped weirdly.
         float size = 256f;
         Matrix4x4 model = Matrix4x4.CreateScale(size, size, 1.0f) * Matrix4x4.CreateTranslation(20 + size / 2f, 20 + size / 2f, 0);
 
@@ -338,6 +362,7 @@ class Program
         MeshManager.SetUniformMatrix(Gl, _spriteShader, "uView", Matrix4x4.Identity);
         MeshManager.SetUniformMatrix(Gl, _spriteShader, "uModel", model);
 
+        // This will only work if your sprite shader is modified for sampler3D!
         _quadMesh.Render();
 
         Gl.Enable(GLEnum.DepthTest);
@@ -411,4 +436,6 @@ class Program
             _frameCount = 0;
         }
     }
+
+
 }

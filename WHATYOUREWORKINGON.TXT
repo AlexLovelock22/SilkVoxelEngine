@@ -240,3 +240,8 @@ void main() {
     vec3 finalRGB = texColor.rgb * (ambient + (shadow * intensity)) * directionalWeight;
     FragColor = vec4(finalRGB, 1.0);
 }
+
+
+
+
+So, we got the shadows working nicely, but upon testing I found out we needed to use a 3d map rather than a 2d one, allowing for blocks to cast shadows when vertically above others.. 
