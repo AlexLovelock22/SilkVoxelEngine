@@ -77,8 +77,6 @@ public class VoxelWorld
         return (byte)BlockType.Air;
     }
 
-    // Inside VoxelWorld.cs
-    // Inside VoxelWorld.cs
     public void SetBlock(int x, int y, int z, byte type, Silk.NET.OpenGL.GL gl, uint voxelTex3D)
     {
         int cx = (int)Math.Floor(x / 16.0);

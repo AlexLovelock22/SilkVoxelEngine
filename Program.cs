@@ -328,7 +328,7 @@ class Program
 
         player.Update(deltaTime, keyboard, voxelWorld);
         player.HandleInteraction(Input, voxelWorld, (float)deltaTime, Gl, _globalVoxelTexture);
-
+        UpdatePerformanceCounters(deltaTime);
         _worldManager.UpdateDirtyChunks();
     }
 
@@ -430,10 +430,19 @@ class Program
 
         if (_timePassed >= 1.0)
         {
+            // Calculate FPS
             double fps = _frameCount / _timePassed;
-            window.Title = $"FPS: {fps:F0} | Position: {player.Position.X:F1}, {player.Position.Y:F1}, {player.Position.Z:F1}";
-            _timePassed = 0;
+
+            // Count active render chunks
+            int chunkCount = _renderChunks.Count;
+
+            // Update Window Title
+            // Format: FPS: 60 | Chunks: 256 | Verts: 1.2M
+            window.Title = $"Voxel Engine | FPS: {fps:F0} | Chunks: {chunkCount} | Vertices: {_totalVertexCount:N0}";
+
+            // Reset counters for the next second
             _frameCount = 0;
+            _timePassed = 0;
         }
     }
 
