@@ -9,7 +9,7 @@ public static class MeshManager
 {
     public static unsafe void UploadToVAO(ref uint vao, ref uint vbo, float[] data, out uint vertexCount, GL gl)
     {
-        vertexCount = (uint)(data.Length / 11);
+        vertexCount = (uint)(data.Length / 12);
         if (vertexCount == 0) return;
 
         if (vao == 0) vao = gl.GenVertexArray();
@@ -21,7 +21,7 @@ public static class MeshManager
         fixed (float* d = data)
             gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), d, BufferUsageARB.StaticDraw);
 
-        int stride = 11 * sizeof(float);
+        int stride = 12 * sizeof(float);
         gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, (uint)stride, (void*)0);
         gl.EnableVertexAttribArray(0);
         gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, (uint)stride, (void*)(3 * sizeof(float)));
@@ -30,6 +30,8 @@ public static class MeshManager
         gl.EnableVertexAttribArray(2);
         gl.VertexAttribPointer(3, 3, VertexAttribPointerType.Float, false, (uint)stride, (void*)(8 * sizeof(float)));
         gl.EnableVertexAttribArray(3);
+        gl.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, (uint)stride, (void*)(11 * sizeof(float)));
+        gl.EnableVertexAttribArray(4);
     }
 
     public static unsafe void FinalizeGPUUpload(GL gl, List<RenderChunk> renderChunks, Chunk chunk, (float[] opaque, float[] water) meshData)

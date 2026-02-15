@@ -15,4 +15,6 @@ public class RenderChunk
     public uint WaterVertexCount;
 
     public Vector3 WorldPosition;
+
+    public uint AO;
 }
