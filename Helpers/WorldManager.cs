@@ -22,7 +22,6 @@ public class WorldManager
     {
         Task.Run(() => WorldStreamerLoop(getCameraPos));
     }
-
     private void WorldStreamerLoop(Func<Vector3> getCameraPos)
     {
         const int viewDistance = 31;
@@ -35,61 +34,73 @@ public class WorldManager
                 int pCX = (int)Math.Floor(camPos.X / 16.0f);
                 int pCZ = (int)Math.Floor(camPos.Z / 16.0f);
 
-                HashSet<(int, int)> visibleCoords = new HashSet<(int, int)>();
+                // 1. GLOBAL UNLOAD CHECK
+                foreach (var coord in _voxelWorld.Chunks.Keys)
+                {
+                    if (Math.Abs(coord.Item1 - pCX) > viewDistance ||
+                        Math.Abs(coord.Item2 - pCZ) > viewDistance)
+                    {
+                        if (_voxelWorld.Chunks.TryRemove(coord, out _))
+                        {
+                            _unloadQueue.Enqueue(coord);
+                            // LOG: Identify exactly which chunk is being sent to the graveyard
+                            Console.WriteLine($"[WSL]: Enqueued Unload ({coord.Item1}, {coord.Item2}) | Total in Queue: {_unloadQueue.Count}");
+                        }
+                    }
+                }
 
-                // Spiral logic to find all coords within viewDistance square
+                // 2. SPIRAL LOAD
                 int x = 0, z = 0;
                 int dx = 0, dz = -1;
                 int sideLength = (viewDistance * 2) + 1;
                 int maxChunks = sideLength * sideLength;
+                int loadCount = 0;
 
                 for (int i = 0; i < maxChunks; i++)
                 {
-                    visibleCoords.Add((pCX + x, pCZ + z));
+                    var coord = (pCX + x, pCZ + z);
+
+                    // RACE CONDITION PROTECTION:
+                    // If the chunk is in the unload queue, DO NOT try to load it yet.
+                    // We check if any item in the queue matches our target coordinate.
+                    bool pendingDelete = _unloadQueue.Any(q => q.x == coord.Item1 && q.z == coord.Item2);
+
+                    if (!_voxelWorld.Chunks.ContainsKey(coord) && !pendingDelete)
+                    {
+                        var chunk = new Chunk(coord.Item1, coord.Item2, _voxelWorld);
+                        if (_voxelWorld.Chunks.TryAdd(coord, chunk))
+                        {
+                            var n = _voxelWorld.GetNeighbors(coord.Item1, coord.Item2);
+
+                            // Mesh only if neighbors exist
+                            if (n.r != null && n.l != null && n.f != null && n.b != null)
+                                _onChunkReadyForMeshing(chunk);
+
+                            if (n.r != null) _onChunkReadyForMeshing(n.r);
+                            if (n.l != null) _onChunkReadyForMeshing(n.l);
+                            if (n.f != null) _onChunkReadyForMeshing(n.f);
+                            if (n.b != null) _onChunkReadyForMeshing(n.b);
+
+                            loadCount++;
+                        }
+                    }
 
                     if (x == z || (x < 0 && x == -z) || (x > 0 && x == 1 - z))
                     {
                         int temp = dx; dx = -dz; dz = temp;
                     }
                     x += dx; z += dz;
-                }
 
-                // 1. UNLOAD (Only if it's truly outside the set)
-                int unloadCount = 0;
-                foreach (var coord in _voxelWorld.Chunks.Keys)
-                {
-                    if (!visibleCoords.Contains(coord))
+                    // Interruption check
+                    if (loadCount >= 10)
                     {
-                        if (_voxelWorld.Chunks.TryRemove(coord, out _))
-                        {
-                            _unloadQueue.Enqueue(coord);
-                            unloadCount++;
-                        }
-                    }
-                }
-                if (unloadCount > 0) Console.WriteLine($"[WSL] Unloaded {unloadCount} chunks.");
+                        Vector3 currentPos = getCameraPos();
+                        if ((int)Math.Floor(currentPos.X / 16.0f) != pCX || (int)Math.Floor(currentPos.Z / 16.0f) != pCZ)
+                            break;
 
-                // 2. LOAD
-                int loadCount = 0;
-                foreach (var coord in visibleCoords)
-                {
-                    if (!_voxelWorld.Chunks.ContainsKey(coord))
-                    {
-                        var chunk = new Chunk(coord.Item1, coord.Item2, _voxelWorld);
-                        if (_voxelWorld.Chunks.TryAdd(coord, chunk))
-                        {
-                            _onChunkReadyForMeshing(chunk);
-
-                            // Remesh neighbors to fix the "diagonal" culling walls
-                            UpdateNeighborIfExists(coord.Item1 + 1, coord.Item2);
-                            UpdateNeighborIfExists(coord.Item1 - 1, coord.Item2);
-                            UpdateNeighborIfExists(coord.Item1, coord.Item2 + 1);
-                            UpdateNeighborIfExists(coord.Item1, coord.Item2 - 1);
-                            loadCount++;
-                        }
+                        Thread.Sleep(1);
+                        loadCount = 0;
                     }
-                    // Throttle loading so we don't drop frames
-                    if (loadCount > 5) { Thread.Sleep(1); loadCount = 0; }
                 }
             }
             catch (Exception ex)
@@ -97,15 +108,7 @@ public class WorldManager
                 Console.WriteLine($"[WSL ERROR]: {ex}");
             }
 
-            Thread.Sleep(50); // Increased sleep to prevent "flickering"
-        }
-    }
-
-    private void UpdateNeighborIfExists(int cx, int cz)
-    {
-        if (_voxelWorld.Chunks.TryGetValue((cx, cz), out var neighbor))
-        {
-            _onChunkReadyForMeshing(neighbor);
+            Thread.Sleep(10);
         }
     }
 
@@ -115,14 +118,25 @@ public class WorldManager
         {
             lock (renderChunks)
             {
-                var existing = renderChunks.Find(rc =>
+                // We use a predicate to find ALL instances of this chunk in the render list
+                var toRemove = renderChunks.Where(rc =>
                     (int)Math.Floor(rc.WorldPosition.X / 16.0f) == coords.x &&
-                    (int)Math.Floor(rc.WorldPosition.Z / 16.0f) == coords.z);
+                    (int)Math.Floor(rc.WorldPosition.Z / 16.0f) == coords.z).ToList();
 
-                if (existing != null)
+                if (toRemove.Count > 0)
                 {
-                    MeshManager.DeleteChunkMesh(gl, existing);
-                    renderChunks.Remove(existing);
+                    foreach (var rc in toRemove)
+                    {
+                        MeshManager.DeleteChunkMesh(gl, rc);
+                        renderChunks.Remove(rc);
+                    }
+                   // Console.WriteLine($"[MainThread]: Deleted {toRemove.Count} mesh(es) at ({coords.x}, {coords.z})");
+                }
+                else
+                {
+                    // This is where your 'trailing' chunks live. 
+                    // They aren't in renderChunks, but they might still be in the GPU.
+                    Console.WriteLine($"[MainThread]: CRITICAL - Ghost Chunk at ({coords.x}, {coords.z}) was not in the render list!");
                 }
             }
         }
@@ -134,8 +148,8 @@ public class WorldManager
         {
             if (chunk.IsDirty)
             {
-                chunk.IsDirty = false;
                 _onChunkReadyForMeshing(chunk);
+                chunk.IsDirty = false;
             }
         }
     }

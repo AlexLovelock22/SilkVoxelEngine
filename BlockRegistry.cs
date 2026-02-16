@@ -7,7 +7,9 @@ public enum BlockType : byte
     Dirt = 2,
     Water = 3,
     Mud = 4,
-    Stone = 5
+    Stone = 5,
+    Sand = 6,
+    CoarseDirt = 7
 }
 
 public static class BlockRegistry
@@ -24,6 +26,8 @@ public static class BlockRegistry
             BlockType.Water => 3,
             BlockType.Mud => 4,
             BlockType.Stone => 5,
+            BlockType.Sand => 6,
+            BlockType.CoarseDirt => 7,
             _ => 0
         };
     }

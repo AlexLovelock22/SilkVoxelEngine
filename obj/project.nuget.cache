@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "uhRRHiduEZw=",
+  "dgSpecHash": "sazO+IkiN6g=",
   "success": true,
   "projectFilePath": "C:\\Users\\kloak\\VoxelEngine-Silk.Net-1.0\\VoxelEngine-Silk.Net-1.0.csproj",
   "expectedPackageFiles": [
@@ -21,10 +21,7 @@
     "C:\\Users\\kloak\\.nuget\\packages\\system.memory\\4.6.3\\system.memory.4.6.3.nupkg.sha512",
     "C:\\Users\\kloak\\.nuget\\packages\\system.numerics.vectors\\4.6.1\\system.numerics.vectors.4.6.1.nupkg.sha512",
     "C:\\Users\\kloak\\.nuget\\packages\\system.runtime.compilerservices.unsafe\\6.1.2\\system.runtime.compilerservices.unsafe.6.1.2.nupkg.sha512",
-    "C:\\Users\\kloak\\.nuget\\packages\\ultz.native.glfw\\3.4.0\\ultz.native.glfw.3.4.0.nupkg.sha512",
-    "C:\\Users\\kloak\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x64\\9.0.12\\microsoft.netcore.app.runtime.win-x64.9.0.12.nupkg.sha512",
-    "C:\\Users\\kloak\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x64\\9.0.12\\microsoft.windowsdesktop.app.runtime.win-x64.9.0.12.nupkg.sha512",
-    "C:\\Users\\kloak\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x64\\9.0.12\\microsoft.aspnetcore.app.runtime.win-x64.9.0.12.nupkg.sha512"
+    "C:\\Users\\kloak\\.nuget\\packages\\ultz.native.glfw\\3.4.0\\ultz.native.glfw.3.4.0.nupkg.sha512"
   ],
   "logs": []
 }

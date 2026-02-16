@@ -53,7 +53,6 @@ class Program
     private static uint _spriteShader;
     private static QuadMesh _quadMesh = null!;
     private static WorldManager _worldManager = null!;
-    private static uint _globalHeightmapTexture;
     private static uint _globalVoxelTexture;
 
     static void Main(string[] args)
@@ -63,7 +62,7 @@ class Program
         options.WindowBorder = WindowBorder.Resizable;
         options.Size = new Vector2D<int>(1920, 1080);
         options.Title = "Voxel Engine - Multi-Chunk View";
-        options.VSync = false;
+        options.VSync = true;
 
         window = Window.Create(options);
 
@@ -83,7 +82,7 @@ class Program
 
         // 1. Basic GL States
         Gl.Enable(GLEnum.DepthTest);
-        Gl.Enable(GLEnum.CullFace); // Recommended: Don't render the inside of blocks
+        Gl.Enable(GLEnum.CullFace);
 
         // 2. Setup Alpha Blending
         Gl.Enable(GLEnum.Blend);
@@ -117,7 +116,11 @@ class Program
 
         _crosshair = new Crosshair(Gl);
         _crosshairShader = ShaderManager.CompileCrosshairShader(Gl);
+        File.Delete("BiomePreview_Organic.png");
+        File.Delete("temp_map.png");
 
+        // voxelWorld.ExportBiomeMap(2048);
+        //  voxelWorld.ExportNoiseDebug("temp_map.png", 1024, 1024, 0, 0);
         string vertexCode = Path.Combine("Shaders", "shader.vert");
         string fragmentCode = Path.Combine("Shaders", "shader.frag");
         Shader = ShaderManager.CreateShaderProgramFromFile(vertexCode, fragmentCode, Gl);
@@ -128,20 +131,16 @@ class Program
         // 4. Input and Background Tasks
         Stopwatch totalSw = Stopwatch.StartNew();
         InitShadowSystem();
-        // Fix CS0103: Initialize the _worldManager field
         _worldManager = new WorldManager(voxelWorld, _unloadQueue, (chunk) =>
-{
-    Task.Run(() =>
-    {
-        var meshData = chunk.FillVertexData();
+        {
+            Task.Run(() =>
+            {
+                var meshData = chunk.FillVertexData();
+                byte[] volumeData = PrecomputeVolumeData(chunk);
 
-        // PRE-CALCULATE the 3D byte array here on the background thread!
-        // This takes the "computing" load off the main thread.
-        byte[] volumeData = PrecomputeVolumeData(chunk);
-
-        _uploadQueue.Enqueue((chunk, meshData, volumeData));
-    });
-});
+                _uploadQueue.Enqueue((chunk, meshData, volumeData));
+            });
+        });
 
         // Start the streaming thread via the manager helper
         _worldManager.StartStreaming(() => player.GetEyePosition());
@@ -164,13 +163,7 @@ class Program
         _globalVoxelTexture = MeshManager.CreateVoxel3DTexture(Gl);
     }
 
-    // Call this in OnUpdate to process the queue
-    private static void ProcessShadowUpdates()
-    {
-        // We can peek at the _uploadQueue without dequeuing, 
-        // or integrate this directly into your existing ProcessUploadQueue.
-        // For now, let's assume we call it when a chunk is processed:
-    }
+
 
     private static void OnRender(double deltaTime)
     {
@@ -324,8 +317,8 @@ class Program
         _timeManager.Update(deltaTime);
 
         // Increase this slightly (e.g., 2 or 3) if generation is too slow
-        MeshManager.ProcessUploadQueue(Gl, _globalVoxelTexture, _renderChunks, _uploadQueue);
-
+        MeshManager.ProcessUploadQueue(Gl, _globalVoxelTexture, _renderChunks, _uploadQueue, voxelWorld);
+        
         player.Update(deltaTime, keyboard, voxelWorld);
         player.HandleInteraction(Input, voxelWorld, (float)deltaTime, Gl, _globalVoxelTexture);
         UpdatePerformanceCounters(deltaTime);
@@ -430,21 +423,44 @@ class Program
 
         if (_timePassed >= 1.0)
         {
-            // Calculate FPS
+            // 1. Basic Performance Metrics
             double fps = _frameCount / _timePassed;
-
-            // Count active render chunks
             int chunkCount = _renderChunks.Count;
 
-            // Update Window Title
-            // Format: FPS: 60 | Chunks: 256 | Verts: 1.2M
-            window.Title = $"Voxel Engine | FPS: {fps:F0} | Chunks: {chunkCount} | Vertices: {_totalVertexCount:N0}";
+            // 2. Get Player Position
+            Vector3 pos = player.GetEyePosition();
 
-            // Reset counters for the next second
+            // 3. Sample Climate and Determine Biome
+            // We sample the noise at the player's X and Z coordinates
+            float t = (voxelWorld.TempNoise.GetNoise(pos.X, pos.Z) + 1f) / 2f;
+            float h = (voxelWorld.HumidityNoise.GetNoise(pos.X, pos.Z) + 1f) / 2f;
+
+            string currentBiome = "Unknown";
+            float minDistance = float.MaxValue;
+
+            // Find the biome with the closest matching "Ideal" parameters
+            foreach (BiomeType type in Enum.GetValues(typeof(BiomeType)))
+            {
+                var settings = BiomeManager.GetSettings(type);
+                float dist = MathF.Sqrt(MathF.Pow(t - settings.IdealTemp, 2) + MathF.Pow(h - settings.IdealHumidity, 2));
+
+                if (dist < minDistance)
+                {
+                    minDistance = dist;
+                    currentBiome = type.ToString();
+                }
+            }
+
+            // 4. Update Window Title with new information
+            window.Title = $"Voxel Engine | FPS: {fps:F0} | " +
+                           $"Pos: ({pos.X:F0}, {pos.Y:F0}, {pos.Z:F0}) | " +
+                           $"Biome: {currentBiome} | " +
+                           $"Chunks: {chunkCount} | Verts: {_totalVertexCount:N0}";
+
+            // Reset counters
             _frameCount = 0;
             _timePassed = 0;
         }
     }
-
 
 }

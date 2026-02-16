@@ -70,7 +70,6 @@ namespace VoxelEngine_Silk.Net_1._0.Helpers
             return handle;
         }
 
-
         public static void Bind(GL gl, uint handle, uint unit = 0)
         {
             // unit 0 = Texture0, unit 1 = Texture1, etc.

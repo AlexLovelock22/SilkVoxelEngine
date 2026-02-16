@@ -12,7 +12,6 @@ public class Chunk
     public byte[,,] Blocks = new byte[Size, Height, Size]; // Updated array
     public bool IsDirty { get; set; } = true;
 
-    // Handling Max Height so we're not wasing resources:
     private int[,] _heightMap = new int[Size, Size];
     private int _highestPoint = 0;
 
@@ -35,7 +34,6 @@ public class Chunk
     private void GenerateTerrain(VoxelWorld world)
     {
         _highestPoint = 0;
-        int[,] tempMap = new int[Size, Size];
 
         for (int x = 0; x < Size; x++)
         {
@@ -44,99 +42,85 @@ public class Chunk
                 float worldX = (ChunkX * Size) + x;
                 float worldZ = (ChunkZ * Size) + z;
 
-                float macroNoise = world.HeightNoise.GetNoise(worldX * 0.005f, worldZ * 0.005f);
-                float continentalOffset = macroNoise * 40f;
-                float temp = (world.TempNoise.GetNoise(worldX * 0.5f, worldZ * 0.5f) + 1f) / 2f;
-                float humidity = (world.HumidityNoise.GetNoise(worldX * 0.5f, worldZ * 0.5f) + 1f) / 2f;
+                // 1. Get the procedural height from BiomeManager
+                float heightSample = BiomeManager.GetHeightAt(world, worldX, worldZ);
+                int surfaceY = (int)Math.Clamp(heightSample, 0, Height - 1);
 
-                float biomeHeight = GetWeightedHeight(world, worldX, worldZ, temp, humidity);
-                float finalHeightFloat = biomeHeight + continentalOffset;
+                if (surfaceY > _highestPoint) _highestPoint = surfaceY;
+                _heightMap[x, z] = surfaceY;
 
-                float riverSample = MathF.Abs(world.RiverNoise.GetNoise(worldX, worldZ));
-                if (riverSample < 0.02f)
+                // 2. Determine the dominant biome for block selection
+                // We re-calculate climate to see which biome "wins" at this specific spot
+                float t = (world.TempNoise.GetNoise(worldX, worldZ) + 1f) / 2f;
+                float h = (world.HumidityNoise.GetNoise(worldX, worldZ) + 1f) / 2f;
+
+                BiomeType dominantBiome = BiomeType.Plains;
+                float maxInfluence = -1.0f;
+
+                foreach (BiomeType type in Enum.GetValues(typeof(BiomeType)))
                 {
-                    finalHeightFloat -= ((1.0f - (riverSample / 0.02f)) * 15f);
+                    // We use the internal BiomeManager method to find influence
+                    // Note: If CalculateInfluence is private, you may need to make it public in BiomeManager.cs
+                    float influence = 1.0f - (MathF.Sqrt(MathF.Pow(t - BiomeManager.GetSettings(type).IdealTemp, 2) +
+                                             MathF.Pow(h - BiomeManager.GetSettings(type).IdealHumidity, 2)) * 1.2f);
+
+                    if (influence > maxInfluence)
+                    {
+                        maxInfluence = influence;
+                        dominantBiome = type;
+                    }
                 }
 
-                // Maintain strictly integer alignment for the voxel blocks
-                int finalHeight = (int)MathF.Floor(finalHeightFloat);
-                finalHeight = Math.Clamp(finalHeight, 0, Height - 1);
-
-                tempMap[x, z] = finalHeight;
-                if (finalHeight > _highestPoint) _highestPoint = finalHeight;
-
+                // 3. Fill the column
                 for (int y = 0; y < Height; y++)
                 {
-                    if (y > finalHeight)
+                    if (y > surfaceY)
                     {
-                        Blocks[x, y, z] = y <= (int)BiomeManager.SEA_LEVEL ? (byte)BlockType.Water : (byte)BlockType.Air;
+                        // Water level check (if below SEA_LEVEL and no block, place water)
+                        if (y <= BiomeManager.SEA_LEVEL)
+                        {
+                            Blocks[x, y, z] = (byte)BlockType.Water;
+                        }
+                        else
+                        {
+                            Blocks[x, y, z] = (byte)BlockType.Air;
+                        }
                     }
-                    else if (y == finalHeight)
+                    else if (y == surfaceY)
                     {
-                        Blocks[x, y, z] = y <= (int)BiomeManager.SEA_LEVEL - 1 ? (byte)BlockType.Mud : (byte)BlockType.Grass;
+                        // Assign test blocks based on dominant biome
+                        Blocks[x, y, z] = dominantBiome switch
+                        {
+                            BiomeType.Plains => (byte)BlockType.Grass,
+                            BiomeType.Tundra => (byte)BlockType.Dirt,  // Testing requirement
+                            BiomeType.Mountains => (byte)BlockType.Mud, // Testing requirement
+                            BiomeType.Desert => (byte)BlockType.Stone,
+                            BiomeType.Forest => (byte)BlockType.CoarseDirt,
+                            _ => (byte)BlockType.Grass
+                        };
                     }
-                    else if (y > finalHeight - 4)
+                    else if (y > surfaceY - 4)
                     {
+                        // Subsurface
                         Blocks[x, y, z] = (byte)BlockType.Dirt;
                     }
                     else
                     {
+                        // Deep underground
                         Blocks[x, y, z] = (byte)BlockType.Stone;
                     }
                 }
             }
         }
-
-        for (int x = 0; x < Size; x++)
-            for (int z = 0; z < Size; z++)
-                _heightMap[x, z] = tempMap[x, z];
-
-        this.IsDirty = true;
     }
 
-    private float GetWeightedHeight(VoxelWorld world, float wx, float wz, float t, float h)
+    private byte SetBlockType(int y, int height)
     {
-        // Sample all biomes and blend them based on climate influence
-        BiomeType[] types = (BiomeType[])Enum.GetValues(typeof(BiomeType));
-        float totalWeight = 0;
-        float weightedHeight = 0;
-
-        foreach (var type in types)
-        {
-            float influence = CalculateBiomeInfluence(type, t, h);
-            if (influence <= 0) continue;
-
-            var settings = BiomeManager.GetSettings(type);
-            float weight = influence * influence; // Smoother transitions
-
-            // Sample noise at the biome's specific frequency
-            float noise = world.HeightNoise.GetNoise(wx * (settings.Frequency * 100f), wz * (settings.Frequency * 100f));
-            float hSample = settings.BaseHeight + (noise * settings.Variation);
-
-            weightedHeight += hSample * weight;
-            totalWeight += weight;
-        }
-
-        return (totalWeight > 0) ? (weightedHeight / totalWeight) : 64f;
+        if (y > height) return y <= (int)BiomeManager.SEA_LEVEL ? (byte)BlockType.Water : (byte)BlockType.Air;
+        if (y == height) return y <= (int)BiomeManager.SEA_LEVEL - 1 ? (byte)BlockType.Mud : (byte)BlockType.Grass;
+        if (y > height - 4) return (byte)BlockType.Dirt;
+        return (byte)BlockType.Stone;
     }
-
-    private float CalculateBiomeInfluence(BiomeType type, float t, float h)
-    {
-        // Maps climate distance to a 0-1 weight
-        float targetT = 0.5f, targetH = 0.5f;
-        switch (type)
-        {
-            case BiomeType.Desert: targetT = 0.8f; targetH = 0.2f; break;
-            case BiomeType.Forest: targetT = 0.7f; targetH = 0.7f; break;
-            case BiomeType.Mountains: targetT = 0.2f; targetH = 0.5f; break;
-            case BiomeType.Plains: targetT = 0.5f; targetH = 0.4f; break;
-            case BiomeType.Tundra: targetT = 0.1f; targetH = 0.2f; break;
-        }
-
-        float dist = MathF.Sqrt(MathF.Pow(t - targetT, 2) + MathF.Pow(h - targetH, 2));
-        return Math.Max(0, 1.0f - (dist * 2.5f)); // 2.5f defines the blend 'softness'
-    }
-
 
 
     private void AddGreedyFace(List<float> v, int x, int y, int z, int w, int d, bool isTop, byte type, float[] ao)
@@ -145,12 +129,6 @@ public class Chunk
         var data = GetFaceData(type, face, w, d);
         Vector3 normal = isTop ? new Vector3(0, 1, 0) : new Vector3(0, -1, 0);
         float yPos = isTop ? y + 1 : y;
-
-        // Diagnostic log preserved from your previous run
-        if (isTop && x == 0 && z == 0)
-        {
-            Console.WriteLine($"[FaceLog] Top Face at ({x},{y},{z}) AO: [{ao[0]}, {ao[1]}, {ao[2]}, {ao[3]}] yPos: {yPos}");
-        }
 
         // Corner Positions
         Vector3 v0 = new Vector3(x, yPos, z);         // Bottom-Left
@@ -342,7 +320,7 @@ public class Chunk
 
     private (Vector2 min, Vector2 max, Vector3 color) GetFaceData(byte type, string face, int w, int h)
     {
-        float atlasWidthTiles = 6f; // Total blocks in your atlas
+        float atlasWidthTiles = 8f; // Total blocks in your atlas
         float atlasHeightTiles = 1f;
 
         float uUnit = 1.0f / atlasWidthTiles;
@@ -542,7 +520,4 @@ public class Chunk
 
         return ao;
     }
-
-
-
 }

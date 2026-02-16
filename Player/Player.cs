@@ -93,7 +93,7 @@ public class Player
         Vector3 moveDir = GetInputDirection(keyboard);
 
         float currentMaxSpeed = IsFlying ? 60.0f : (WALK_SPEED * 1.6f);
-        float swimSpeed = WALK_SPEED * 0.85f; // Slightly increased swim speed as requested
+        float swimSpeed = WALK_SPEED * 0.85f;
 
         // 3. Apply Vertical Physics
         if (IsFlying)
