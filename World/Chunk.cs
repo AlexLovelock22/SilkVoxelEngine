@@ -139,96 +139,144 @@ public class Chunk
 
 
 
-    private void AddGreedyFace(List<float> v, int x, int y, int z, int w, int d, bool isTop, byte type, float ao)
+    private void AddGreedyFace(List<float> v, int x, int y, int z, int w, int d, bool isTop, byte type, float[] ao)
     {
         var face = isTop ? "top" : "bottom";
         var data = GetFaceData(type, face, w, d);
         Vector3 normal = isTop ? new Vector3(0, 1, 0) : new Vector3(0, -1, 0);
+        float yPos = isTop ? y + 1 : y;
 
-        if (isTop)
+        // Diagnostic log preserved from your previous run
+        if (isTop && x == 0 && z == 0)
+        {
+            Console.WriteLine($"[FaceLog] Top Face at ({x},{y},{z}) AO: [{ao[0]}, {ao[1]}, {ao[2]}, {ao[3]}] yPos: {yPos}");
+        }
+
+        // Corner Positions
+        Vector3 v0 = new Vector3(x, yPos, z);         // Bottom-Left
+        Vector3 v1 = new Vector3(x + w, yPos, z);     // Bottom-Right
+        Vector3 v2 = new Vector3(x + w, yPos, z + d); // Top-Right
+        Vector3 v3 = new Vector3(x, yPos, z + d);     // Top-Left
+
+        // For TOP faces to be CCW (visible from above):
+        // Triangle 1: v0 -> v3 -> v2
+        // Triangle 2: v0 -> v2 -> v1
+        // (This is the reverse of what was likely happening)
+
+        if (ao[0] + ao[2] < ao[1] + ao[3])
         {
             // Triangle 1
-            AddVertex(v, new Vector3(x, y + 1, z), data.color, new Vector2(data.min.X, data.min.Y), normal, ao);
-            AddVertex(v, new Vector3(x, y + 1, z + d), data.color, new Vector2(data.min.X, data.max.Y), normal, ao);
-            AddVertex(v, new Vector3(x + w, y + 1, z + d), data.color, new Vector2(data.max.X, data.max.Y), normal, ao);
+            AddVertex(v, v0, data.color, new Vector2(data.min.X, data.min.Y), normal, ao[0]);
+            AddVertex(v, v3, data.color, new Vector2(data.min.X, data.max.Y), normal, ao[3]);
+            AddVertex(v, v2, data.color, new Vector2(data.max.X, data.max.Y), normal, ao[2]);
 
             // Triangle 2
-            AddVertex(v, new Vector3(x, y + 1, z), data.color, new Vector2(data.min.X, data.min.Y), normal, ao);
-            AddVertex(v, new Vector3(x + w, y + 1, z + d), data.color, new Vector2(data.max.X, data.max.Y), normal, ao);
-            AddVertex(v, new Vector3(x + w, y + 1, z), data.color, new Vector2(data.max.X, data.min.Y), normal, ao);
+            AddVertex(v, v0, data.color, new Vector2(data.min.X, data.min.Y), normal, ao[0]);
+            AddVertex(v, v2, data.color, new Vector2(data.max.X, data.max.Y), normal, ao[2]);
+            AddVertex(v, v1, data.color, new Vector2(data.max.X, data.min.Y), normal, ao[1]);
         }
         else
         {
             // Triangle 1
-            AddVertex(v, new Vector3(x, y, z), data.color, new Vector2(data.min.X, data.min.Y), normal, ao);
-            AddVertex(v, new Vector3(x + w, y, z + d), data.color, new Vector2(data.max.X, data.max.Y), normal, ao);
-            AddVertex(v, new Vector3(x, y, z + d), data.color, new Vector2(data.min.X, data.max.Y), normal, ao);
+            AddVertex(v, v1, data.color, new Vector2(data.max.X, data.min.Y), normal, ao[1]);
+            AddVertex(v, v0, data.color, new Vector2(data.min.X, data.min.Y), normal, ao[0]);
+            AddVertex(v, v3, data.color, new Vector2(data.min.X, data.max.Y), normal, ao[3]);
 
             // Triangle 2
-            AddVertex(v, new Vector3(x, y, z), data.color, new Vector2(data.min.X, data.min.Y), normal, ao);
-            AddVertex(v, new Vector3(x + w, y, z), data.color, new Vector2(data.max.X, data.min.Y), normal, ao);
-            AddVertex(v, new Vector3(x + w, y, z + d), data.color, new Vector2(data.max.X, data.max.Y), normal, ao);
+            AddVertex(v, v1, data.color, new Vector2(data.max.X, data.min.Y), normal, ao[1]);
+            AddVertex(v, v3, data.color, new Vector2(data.min.X, data.max.Y), normal, ao[3]);
+            AddVertex(v, v2, data.color, new Vector2(data.max.X, data.max.Y), normal, ao[2]);
         }
     }
 
     // 3. Update AddVerticalGreedySide for Side normals
-    private void AddVerticalGreedySide(List<float> v, int x, int y, int z, int height, int side, byte type)
+    private void AddVerticalGreedySide(List<float> v, int x, int y, int z, int height, int side, byte type, float[] ao)
     {
         var data = GetFaceData(type, "side", 1, height);
         Vector3 p1, p2, p3, p4;
         Vector3 normal;
 
-        float ao = 0.3f;
-
+        // Determine corner positions and normals based on side
         switch (side)
         {
             case 0: // Left (-X)
                 p1 = new Vector3(x, y, z); p2 = new Vector3(x, y, z + 1);
                 p3 = new Vector3(x, y + height, z + 1); p4 = new Vector3(x, y + height, z);
-                normal = new Vector3(-1, 0, 0);
-                break;
+                normal = new Vector3(-1, 0, 0); break;
             case 1: // Right (+X)
                 p1 = new Vector3(x + 1, y, z + 1); p2 = new Vector3(x + 1, y, z);
                 p3 = new Vector3(x + 1, y + height, z); p4 = new Vector3(x + 1, y + height, z + 1);
-                normal = new Vector3(1, 0, 0);
-                break;
+                normal = new Vector3(1, 0, 0); break;
             case 2: // Front (+Z)
                 p1 = new Vector3(x, y, z + 1); p2 = new Vector3(x + 1, y, z + 1);
                 p3 = new Vector3(x + 1, y + height, z + 1); p4 = new Vector3(x, y + height, z + 1);
-                normal = new Vector3(0, 0, 1);
-                break;
+                normal = new Vector3(0, 0, 1); break;
             default: // Back (-Z)
                 p1 = new Vector3(x + 1, y, z); p2 = new Vector3(x, y, z);
                 p3 = new Vector3(x, y + height, z); p4 = new Vector3(x + 1, y + height, z);
-                normal = new Vector3(0, 0, -1);
-                break;
+                normal = new Vector3(0, 0, -1); break;
         }
 
-        AddVertex(v, p1, data.color, new Vector2(data.min.X, data.min.Y), normal, ao);
-        AddVertex(v, p2, data.color, new Vector2(data.max.X, data.min.Y), normal, ao);
-        AddVertex(v, p3, data.color, new Vector2(data.max.X, data.max.Y), normal, ao);
+        // Mapping: ao[0]: p1, ao[1]: p2, ao[2]: p3, ao[3]: p4
+        // Flip diagonal if the alternative diagonal is darker to smooth the gradient
+        if (ao[0] + ao[2] < ao[1] + ao[3])
+        {
+            // Triangle 1
+            AddVertex(v, p1, data.color, new Vector2(data.min.X, data.min.Y), normal, ao[0]);
+            AddVertex(v, p3, data.color, new Vector2(data.max.X, data.max.Y), normal, ao[2]);
+            AddVertex(v, p4, data.color, new Vector2(data.min.X, data.max.Y), normal, ao[3]);
 
-        AddVertex(v, p1, data.color, new Vector2(data.min.X, data.min.Y), normal, ao);
-        AddVertex(v, p3, data.color, new Vector2(data.max.X, data.max.Y), normal, ao);
-        AddVertex(v, p4, data.color, new Vector2(data.min.X, data.max.Y), normal, ao);
+            // Triangle 2
+            AddVertex(v, p1, data.color, new Vector2(data.min.X, data.min.Y), normal, ao[0]);
+            AddVertex(v, p2, data.color, new Vector2(data.max.X, data.min.Y), normal, ao[1]);
+            AddVertex(v, p3, data.color, new Vector2(data.max.X, data.max.Y), normal, ao[2]);
+        }
+        else
+        {
+            // Triangle 1
+            AddVertex(v, p2, data.color, new Vector2(data.max.X, data.min.Y), normal, ao[1]);
+            AddVertex(v, p3, data.color, new Vector2(data.max.X, data.max.Y), normal, ao[2]);
+            AddVertex(v, p4, data.color, new Vector2(data.min.X, data.max.Y), normal, ao[3]);
+
+            // Triangle 2
+            AddVertex(v, p2, data.color, new Vector2(data.max.X, data.min.Y), normal, ao[1]);
+            AddVertex(v, p4, data.color, new Vector2(data.min.X, data.max.Y), normal, ao[3]);
+            AddVertex(v, p1, data.color, new Vector2(data.min.X, data.min.Y), normal, ao[0]);
+        }
     }
 
 
 
-    private void AddBottomFace(List<float> v, int x, int y, int z, byte type)
+    private void AddBottomFace(List<float> v, int x, int y, int z, byte type, float[] ao)
     {
         var data = GetFaceData(type, "bottom", 1, 1);
         Vector3 normal = new Vector3(0, -1, 0);
-        float ao = 0.3f;
-        // Triangle 1
-        AddVertex(v, new Vector3(x, y, z), data.color, new Vector2(data.min.X, data.min.Y), normal, ao);
-        AddVertex(v, new Vector3(x + 1, y, z + 1), data.color, new Vector2(data.max.X, data.max.Y), normal, ao);
-        AddVertex(v, new Vector3(x, y, z + 1), data.color, new Vector2(data.min.X, data.max.Y), normal, ao);
 
-        // Triangle 2
-        AddVertex(v, new Vector3(x, y, z), data.color, new Vector2(data.min.X, data.min.Y), normal, ao);
-        AddVertex(v, new Vector3(x + 1, y, z), data.color, new Vector2(data.max.X, data.min.Y), normal, ao);
-        AddVertex(v, new Vector3(x + 1, y, z + 1), data.color, new Vector2(data.max.X, data.max.Y), normal, ao);
+        Vector3 v0 = new Vector3(x, y, z);
+        Vector3 v1 = new Vector3(x + 1, y, z);
+        Vector3 v2 = new Vector3(x + 1, y, z + 1);
+        Vector3 v3 = new Vector3(x, y, z + 1);
+
+        if (ao[0] + ao[2] < ao[1] + ao[3])
+        {
+            AddVertex(v, v0, data.color, new Vector2(data.min.X, data.min.Y), normal, ao[0]);
+            AddVertex(v, v2, data.color, new Vector2(data.max.X, data.max.Y), normal, ao[2]);
+            AddVertex(v, v3, data.color, new Vector2(data.min.X, data.max.Y), normal, ao[3]);
+
+            AddVertex(v, v0, data.color, new Vector2(data.min.X, data.min.Y), normal, ao[0]);
+            AddVertex(v, v1, data.color, new Vector2(data.max.X, data.min.Y), normal, ao[1]);
+            AddVertex(v, v2, data.color, new Vector2(data.max.X, data.max.Y), normal, ao[2]);
+        }
+        else
+        {
+            AddVertex(v, v1, data.color, new Vector2(data.max.X, data.min.Y), normal, ao[1]);
+            AddVertex(v, v2, data.color, new Vector2(data.max.X, data.max.Y), normal, ao[2]);
+            AddVertex(v, v3, data.color, new Vector2(data.min.X, data.max.Y), normal, ao[3]);
+
+            AddVertex(v, v1, data.color, new Vector2(data.max.X, data.min.Y), normal, ao[1]);
+            AddVertex(v, v3, data.color, new Vector2(data.min.X, data.max.Y), normal, ao[3]);
+            AddVertex(v, v0, data.color, new Vector2(data.min.X, data.min.Y), normal, ao[0]);
+        }
     }
 
     private void AddWaterPlane(List<float> v, int x, int y, int z, float offset, byte type)
@@ -317,77 +365,184 @@ public class Chunk
         List<float> opaqueBuffer = new List<float>();
         List<float> waterBuffer = new List<float>();
 
-        var neighbors = _world.GetNeighbors(ChunkX, ChunkZ);
-        var r = neighbors.r; var l = neighbors.l; var f = neighbors.f; var b = neighbors.b;
+        var n = _world.GetNeighbors(ChunkX, ChunkZ);
+        Chunk? r = n.r; Chunk? l = n.l; Chunk? f = n.f; Chunk? b = n.b;
+
+        int topFaceCount = 0;
+        int totalVoxels = 0;
+
+        bool IsOpaque(int x, int y, int z)
+        {
+            byte id = GetBlockId(x, y, z, r, l, f, b);
+            return id != 0 && id != (byte)BlockType.Water;
+        }
 
         for (int x = 0; x < Size; x++)
         {
             for (int z = 0; z < Size; z++)
             {
-                // Scanning the full column to catch layers (Air -> Water -> Mud -> Stone)
                 for (int y = 0; y < Height; y++)
                 {
                     byte blockType = Blocks[x, y, z];
-                    if (blockType == (byte)BlockType.Air) continue;
+                    if (blockType == 0) continue;
+                    totalVoxels++;
 
-                    // Culling checks
-                    bool up = ShouldRenderFace(blockType, x, y + 1, z, r, l, f, b);
-                    bool down = ShouldRenderFace(blockType, x, y - 1, z, r, l, f, b);
-                    bool left = ShouldRenderFace(blockType, x - 1, y, z, r, l, f, b);
-                    bool right = ShouldRenderFace(blockType, x + 1, y, z, r, l, f, b);
-                    bool front = ShouldRenderFace(blockType, x, y, z + 1, r, l, f, b);
-                    bool back = ShouldRenderFace(blockType, x, y, z - 1, r, l, f, b);
-
-                    if (!up && !down && !left && !right && !front && !back) continue;
+                    bool up = !IsOpaque(x, y + 1, z);
+                    bool down = !IsOpaque(x, y - 1, z);
+                    bool left = !IsOpaque(x - 1, y, z);
+                    bool right = !IsOpaque(x + 1, y, z);
+                    bool front = !IsOpaque(x, y, z + 1);
+                    bool back = !IsOpaque(x, y, z - 1);
 
                     if (blockType == (byte)BlockType.Water)
                     {
-                        // --- WATER LOGIC ---
-                        // 1. Top Surface (Using your special plane with the 1/16th drop and dual-sides)
-                        if (up) AddWaterPlane(waterBuffer, x, y, z, 0.0625f, blockType);
-
-                        // 2. Water Sides (Always added to waterBuffer for transparency)
-                        if (left) AddVerticalGreedySide(waterBuffer, x, y, z, 1, 0, blockType);
-                        if (right) AddVerticalGreedySide(waterBuffer, x, y, z, 1, 1, blockType);
-                        if (front) AddVerticalGreedySide(waterBuffer, x, y, z, 1, 2, blockType);
-                        if (back) AddVerticalGreedySide(waterBuffer, x, y, z, 1, 3, blockType);
-
-                        if (down) AddBottomFace(waterBuffer, x, y, z, blockType);
+                        bool waterSurface = (y + 1 >= Height) || GetBlockId(x, y + 1, z, r, l, f, b) == 0;
+                        if (waterSurface)
+                        {
+                            AddWaterPlane(waterBuffer, x, y, z, 0.06f, blockType);
+                        }
                     }
                     else
                     {
-                        // --- OPAQUE LOGIC (Grass, Dirt, Stone, Mud) ---
-                        // 1 = ao float for addgreedyface
-                        float ao2 = 0.1f;
-                        if (up) AddGreedyFace(opaqueBuffer, x, y, z, 1, 1, true, blockType, ao2);
-                        if (down) AddBottomFace(opaqueBuffer, x, y, z, blockType);
-                        if (left) AddVerticalGreedySide(opaqueBuffer, x, y, z, 1, 0, blockType);
-                        if (right) AddVerticalGreedySide(opaqueBuffer, x, y, z, 1, 1, blockType);
-                        if (front) AddVerticalGreedySide(opaqueBuffer, x, y, z, 1, 2, blockType);
-                        if (back) AddVerticalGreedySide(opaqueBuffer, x, y, z, 1, 3, blockType);
+                        if (!up && !down && !left && !right && !front && !back) continue;
+
+                        if (up)
+                        {
+                            AddGreedyFace(opaqueBuffer, x, y, z, 1, 1, true, blockType, CalculateFaceAO(x, y, z, "top", r, l, f, b));
+                            topFaceCount++;
+                        }
+                        if (down) AddBottomFace(opaqueBuffer, x, y, z, blockType, CalculateFaceAO(x, y, z, "bottom", r, l, f, b));
+                        if (left) AddVerticalGreedySide(opaqueBuffer, x, y, z, 1, 0, blockType, CalculateFaceAO(x, y, z, "left", r, l, f, b));
+                        if (right) AddVerticalGreedySide(opaqueBuffer, x, y, z, 1, 1, blockType, CalculateFaceAO(x, y, z, "right", r, l, f, b));
+                        if (front) AddVerticalGreedySide(opaqueBuffer, x, y, z, 1, 2, blockType, CalculateFaceAO(x, y, z, "front", r, l, f, b));
+                        if (back) AddVerticalGreedySide(opaqueBuffer, x, y, z, 1, 3, blockType, CalculateFaceAO(x, y, z, "back", r, l, f, b));
                     }
                 }
             }
         }
+
+        if (topFaceCount == 0 && totalVoxels > 0)
+        {
+            Console.WriteLine($"[FVD Warning] Chunk {ChunkX},{ChunkZ} has {totalVoxels} voxels but ZERO top faces generated.");
+        }
+
         return (opaqueBuffer.ToArray(), waterBuffer.ToArray());
     }
 
-    private byte GetBlockId(int nx, int ny, int nz, Chunk? r, Chunk? l, Chunk? f, Chunk? b)
+
+    public byte GetBlockId(int x, int y, int z, Chunk? r, Chunk? l, Chunk? f, Chunk? b)
     {
-        if (ny < 0 || ny >= Height) return 0;
+        // 1. Height Safety using actual array bounds
+        if (y < 0 || y >= Height) return 0;
 
-        // Inside this chunk
-        if (nx >= 0 && nx < Size && nz >= 0 && nz < Size)
-            return Blocks[nx, ny, nz];
+        // 2. Internal Check (0 to Size-1)
+        if (x >= 0 && x < Size && z >= 0 && z < Size)
+        {
+            return Blocks[x, y, z];
+        }
 
-        // Neighboring chunks
-        if (nx >= Size) return r?.Blocks[0, ny, nz] ?? 0;
-        if (nx < 0) return l?.Blocks[Size - 1, ny, nz] ?? 0;
-        if (nz >= Size) return f?.Blocks[nx, ny, 0] ?? 0;
-        if (nz < 0) return b?.Blocks[nx, ny, Size - 1] ?? 0;
+        // 3. Neighbor Checks with Bound Guarding
+        // We use Math.Clamp to ensure that if AO asks for a corner (like x=16, z=16),
+        // we don't crash the neighbor's array either.
+        try
+        {
+            if (x >= Size)
+                return r != null ? r.Blocks[0, y, Math.Clamp(z, 0, Size - 1)] : (byte)0;
+            if (x < 0)
+                return l != null ? l.Blocks[Size - 1, y, Math.Clamp(z, 0, Size - 1)] : (byte)0;
+            if (z >= Size)
+                return f != null ? f.Blocks[Math.Clamp(x, 0, Size - 1), y, 0] : (byte)0;
+            if (z < 0)
+                return b != null ? b.Blocks[Math.Clamp(x, 0, Size - 1), y, Size - 1] : (byte)0;
+        }
+        catch (IndexOutOfRangeException)
+        {
+            // If we STILL hit a bound issue, return air instead of killing the thread
+            return 0;
+        }
 
         return 0;
     }
+
+    private float GetVertexAO(bool side1, bool side2, bool corner)
+    {
+        if (side1 && side2) return 0.4f; // Both sides blocked: Max dark
+
+        int count = (side1 ? 1 : 0) + (side2 ? 1 : 0) + (corner ? 1 : 0);
+        return count switch
+        {
+            1 => 0.8f,
+            2 => 0.6f,
+            3 => 0.4f,
+            _ => 1.0f  // No neighbors: Fully bright
+        };
+    }
+
+    private float[] CalculateFaceAO(int x, int y, int z, string face, Chunk? r, Chunk? l, Chunk? f, Chunk? b)
+    {
+        float[] ao = new float[4];
+
+        // Helper to get neighbor blocks safely
+        // Note: y+1 or y-1 inside the chunk is usually safe, but check bounds if your world has a ceiling/floor
+        bool GetSafe(int nx, int ny, int nz)
+        {
+            return GetBlockId(nx, ny, nz, r, l, f, b) != 0;
+        }
+
+        switch (face)
+        {
+            case "top":
+                // Samples at Y + 1
+                ao[0] = GetVertexAO(GetSafe(x - 1, y + 1, z), GetSafe(x, y + 1, z - 1), GetSafe(x - 1, y + 1, z - 1)); // NW
+                ao[1] = GetVertexAO(GetSafe(x + 1, y + 1, z), GetSafe(x, y + 1, z - 1), GetSafe(x + 1, y + 1, z - 1)); // NE
+                ao[2] = GetVertexAO(GetSafe(x + 1, y + 1, z), GetSafe(x, y + 1, z + 1), GetSafe(x + 1, y + 1, z + 1)); // SE
+                ao[3] = GetVertexAO(GetSafe(x - 1, y + 1, z), GetSafe(x, y + 1, z + 1), GetSafe(x - 1, y + 1, z + 1)); // SW
+                break;
+
+            case "bottom":
+                // Samples at Y - 1
+                ao[0] = GetVertexAO(GetSafe(x - 1, y - 1, z), GetSafe(x, y - 1, z - 1), GetSafe(x - 1, y - 1, z - 1));
+                ao[1] = GetVertexAO(GetSafe(x + 1, y - 1, z), GetSafe(x, y - 1, z - 1), GetSafe(x + 1, y - 1, z - 1));
+                ao[2] = GetVertexAO(GetSafe(x + 1, y - 1, z), GetSafe(x, y - 1, z + 1), GetSafe(x + 1, y - 1, z + 1));
+                ao[3] = GetVertexAO(GetSafe(x - 1, y - 1, z), GetSafe(x, y - 1, z + 1), GetSafe(x - 1, y - 1, z + 1));
+                break;
+
+            case "left": // -X side
+                ao[0] = GetVertexAO(GetSafe(x - 1, y - 1, z), GetSafe(x - 1, y, z - 1), GetSafe(x - 1, y - 1, z - 1));
+                ao[1] = GetVertexAO(GetSafe(x - 1, y - 1, z), GetSafe(x - 1, y, z + 1), GetSafe(x - 1, y - 1, z + 1));
+                ao[2] = GetVertexAO(GetSafe(x - 1, y + 1, z), GetSafe(x - 1, y, z + 1), GetSafe(x - 1, y + 1, z + 1));
+                ao[3] = GetVertexAO(GetSafe(x - 1, y + 1, z), GetSafe(x - 1, y, z - 1), GetSafe(x - 1, y + 1, z - 1));
+                break;
+
+            case "right": // +X side
+                ao[0] = GetVertexAO(GetSafe(x + 1, y - 1, z), GetSafe(x + 1, y, z + 1), GetSafe(x + 1, y - 1, z + 1));
+                ao[1] = GetVertexAO(GetSafe(x + 1, y - 1, z), GetSafe(x + 1, y, z - 1), GetSafe(x + 1, y - 1, z - 1));
+                ao[2] = GetVertexAO(GetSafe(x + 1, y + 1, z), GetSafe(x + 1, y, z - 1), GetSafe(x + 1, y + 1, z - 1));
+                ao[3] = GetVertexAO(GetSafe(x + 1, y + 1, z), GetSafe(x + 1, y, z + 1), GetSafe(x + 1, y + 1, z + 1));
+                break;
+
+            case "front": // +Z side
+                ao[0] = GetVertexAO(GetSafe(x - 1, y, z + 1), GetSafe(x, y - 1, z + 1), GetSafe(x - 1, y - 1, z + 1));
+                ao[1] = GetVertexAO(GetSafe(x + 1, y, z + 1), GetSafe(x, y - 1, z + 1), GetSafe(x + 1, y - 1, z + 1));
+                ao[2] = GetVertexAO(GetSafe(x + 1, y, z + 1), GetSafe(x, y + 1, z + 1), GetSafe(x + 1, y + 1, z + 1));
+                ao[3] = GetVertexAO(GetSafe(x - 1, y, z + 1), GetSafe(x, y + 1, z + 1), GetSafe(x - 1, y + 1, z + 1));
+                break;
+
+            case "back": // -Z side
+                ao[0] = GetVertexAO(GetSafe(x + 1, y, z - 1), GetSafe(x, y - 1, z - 1), GetSafe(x + 1, y - 1, z - 1));
+                ao[1] = GetVertexAO(GetSafe(x - 1, y, z - 1), GetSafe(x, y - 1, z - 1), GetSafe(x - 1, y - 1, z - 1));
+                ao[2] = GetVertexAO(GetSafe(x - 1, y, z - 1), GetSafe(x, y + 1, z - 1), GetSafe(x - 1, y + 1, z - 1));
+                ao[3] = GetVertexAO(GetSafe(x + 1, y, z - 1), GetSafe(x, y + 1, z - 1), GetSafe(x + 1, y + 1, z - 1));
+                break;
+
+            default:
+                ao[0] = ao[1] = ao[2] = ao[3] = 1.0f;
+                break;
+        }
+
+        return ao;
+    }
+
 
 
 }
