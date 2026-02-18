@@ -100,7 +100,7 @@ class Program
 
         string vSource = Path.Combine("Shaders", "skybox.vert");
         string fSource = Path.Combine("Shaders", "skybox.frag");
-        //voxelWorld.ExportBiomeMap(2048);
+        //voxelWorld.ExportBiomeMap(8048);
         _quadMesh = new QuadMesh(Gl);
 
         _spriteShader = ShaderManager.CreateShaderProgram(
