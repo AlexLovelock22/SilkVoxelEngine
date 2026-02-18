@@ -9,7 +9,8 @@ public enum BlockType : byte
     Mud = 4,
     Stone = 5,
     Sand = 6,
-    CoarseDirt = 7
+    CoarseDirt = 7,
+    Snow = 8
 }
 
 public static class BlockRegistry
@@ -28,6 +29,7 @@ public static class BlockRegistry
             BlockType.Stone => 5,
             BlockType.Sand => 6,
             BlockType.CoarseDirt => 7,
+            BlockType.Snow => 8,
             _ => 0
         };
     }

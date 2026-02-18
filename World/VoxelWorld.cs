@@ -4,12 +4,15 @@ using System.Collections.Concurrent;
 using VoxelEngine_Silk.Net_1._0.Helpers;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using System.IO;
 
 namespace VoxelEngine_Silk.Net_1._0.World;
 
 public class VoxelWorld
 {
     public ConcurrentDictionary<(int, int), Chunk> Chunks = new();
+    public FastNoiseLite ContinentalNoise = new();
+    public FastNoiseLite ErosionNoise = new();
     public FastNoiseLite HeightNoise = new();
     public FastNoiseLite TempNoise = new();
     public FastNoiseLite HumidityNoise = new();
@@ -21,103 +24,9 @@ public class VoxelWorld
 
     public byte[] GetHeightmapData() => _globalHeightmapData;
 
-    public VoxelWorld()
+    public VoxelWorld(int seed = 13308)
     {
-        int seed = 1337; // Use a fixed seed for testing
-
-        // Terrain Height: Standard frequency for local hills/valleys
-        HeightNoise.SetSeed(seed);
-        HeightNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-        HeightNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
-        HeightNoise.SetFractalOctaves(5);
-        HeightNoise.SetFrequency(0.01f);
-
-        // Temperature: Continental scale (1 cycle every ~500 blocks)
-        TempNoise.SetSeed(seed + 1);
-        TempNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-        TempNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
-        TempNoise.SetFractalOctaves(6);
-        TempNoise.SetFrequency(0.001f);
-
-        // Humidity: Continental scale (1 cycle every ~500 blocks)
-        HumidityNoise.SetSeed(seed + 2);
-        HumidityNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-        HumidityNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
-        HumidityNoise.SetFractalOctaves(3);
-        HumidityNoise.SetFrequency(0.001f);
-    }
-
-    /// <summary>
-    /// Generates a 2D image of the biome distribution centered at 0,0.
-    /// This allows you to visualize the "jigsaw" look.
-    /// </summary>
-    public void ExportNoiseDebug(string path, int width, int height, float startX, float startZ)
-    {
-        using var image = new Image<L8>(width, height);
-
-        for (int z = 0; z < height; z++)
-        {
-            for (int x = 0; x < width; x++)
-            {
-                float wx = startX + x;
-                float wz = startZ + z;
-
-                // We sample raw coordinates because frequency is set in the constructor
-                float noiseValue = TempNoise.GetNoise(wx, wz);
-                byte byteValue = (byte)(Math.Clamp((noiseValue + 1f) / 2f, 0f, 1f) * 255);
-                image[x, z] = new L8(byteValue);
-            }
-        }
-        image.Save(path);
-    }
-
-    public void ExportBiomeMap(int imageSize)
-    {
-        using Image<Rgb24> image = new Image<Rgb24>(imageSize, imageSize);
-
-        for (int z = 0; z < imageSize; z++)
-        {
-            for (int x = 0; x < imageSize; x++)
-            {
-                float worldX = x - (imageSize / 2);
-                float worldZ = z - (imageSize / 2);
-
-                // Using the new unified sampling logic
-                float t = (TempNoise.GetNoise(worldX, worldZ) + 1f) / 2f;
-                float h = (HumidityNoise.GetNoise(worldX + 1000, worldZ + 1000) + 1f) / 2f;
-
-                image[x, z] = GetBiomeColor(t, h);
-            }
-        }
-        image.Save("BiomePreview_Organic.png");
-    }
-
-
-    private Rgb24 GetBiomeColor(float t, float h)
-    {
-        float minDistance = float.MaxValue;
-        Rgb24 bestColor = Color.Magenta;
-
-        foreach (BiomeType type in Enum.GetValues(typeof(BiomeType)))
-        {
-            var settings = BiomeManager.GetSettings(type);
-            float dist = MathF.Sqrt(MathF.Pow(t - settings.IdealTemp, 2) + MathF.Pow(h - settings.IdealHumidity, 2));
-
-            if (dist < minDistance)
-            {
-                minDistance = dist;
-                bestColor = type switch
-                {
-                    BiomeType.Desert => Color.Khaki,
-                    BiomeType.Forest => Color.ForestGreen,
-                    BiomeType.Mountains => Color.SlateGray,
-                    BiomeType.Plains => Color.LightGreen,
-                    BiomeType.Tundra => Color.AliceBlue,
-                    _ => Color.Gray
-                };
-            }
-        }
-        return bestColor;
+        BiomeManager.InitializeNoise(this, seed);
     }
 
     public (Chunk? r, Chunk? l, Chunk? f, Chunk? b) GetNeighbors(int cx, int cz)
@@ -180,5 +89,36 @@ public class VoxelWorld
     private void MarkDirty(int cx, int cz)
     {
         if (Chunks.TryGetValue((cx, cz), out var neighbor)) neighbor.IsDirty = true;
+    }
+
+    public void ExportBiomeMap(int size)
+    {
+        using (Image<Rgba32> image = new Image<Rgba32>(size, size))
+        {
+            for (int x = 0; x < size; x++)
+            {
+                for (int z = 0; z < size; z++)
+                {
+                    float worldX = x - (size / 2);
+                    float worldZ = z - (size / 2);
+
+                    // FIX: Use the exact same 3-arg method as Chunk.cs
+                    BiomeType type = BiomeManager.GetBiomeAt(this, worldX, worldZ);
+
+                    image[x, z] = type switch
+                    {
+                        BiomeType.Ocean => new Rgba32(0, 0, 128),
+                        BiomeType.River => new Rgba32(0, 191, 255),
+                        BiomeType.Mountains => new Rgba32(105, 105, 105),
+                        BiomeType.Forest => new Rgba32(34, 139, 34),
+                        BiomeType.Desert => new Rgba32(237, 201, 175),
+                        BiomeType.Tundra => new Rgba32(200, 245, 255),
+                        BiomeType.Plains => new Rgba32(124, 252, 0),
+                        _ => new Rgba32(0, 0, 0)
+                    };
+                }
+            }
+            image.Save("WorldBiomeMap.png");
+        }
     }
 }

@@ -42,72 +42,37 @@ public class Chunk
                 float worldX = (ChunkX * Size) + x;
                 float worldZ = (ChunkZ * Size) + z;
 
-                // 1. Get the procedural height from BiomeManager
+                // One call to get the warped, ruffly biome result
+                BiomeType biome = BiomeManager.GetBiomeAt(world, worldX, worldZ);
+
                 float heightSample = BiomeManager.GetHeightAt(world, worldX, worldZ);
                 int surfaceY = (int)Math.Clamp(heightSample, 0, Height - 1);
 
+                bool isWater = (biome == BiomeType.Ocean || biome == BiomeType.River);
+                int finalSurface = isWater ? surfaceY - 4 : surfaceY;
+
                 if (surfaceY > _highestPoint) _highestPoint = surfaceY;
-                _heightMap[x, z] = surfaceY;
 
-                // 2. Determine the dominant biome for block selection
-                // We re-calculate climate to see which biome "wins" at this specific spot
-                float t = (world.TempNoise.GetNoise(worldX, worldZ) + 1f) / 2f;
-                float h = (world.HumidityNoise.GetNoise(worldX, worldZ) + 1f) / 2f;
+                byte surfaceBlock = BiomeManager.GetSurfaceBlock(biome);
+                byte fillerBlock = BiomeManager.GetFillerBlock(biome);
 
-                BiomeType dominantBiome = BiomeType.Plains;
-                float maxInfluence = -1.0f;
-
-                foreach (BiomeType type in Enum.GetValues(typeof(BiomeType)))
-                {
-                    // We use the internal BiomeManager method to find influence
-                    // Note: If CalculateInfluence is private, you may need to make it public in BiomeManager.cs
-                    float influence = 1.0f - (MathF.Sqrt(MathF.Pow(t - BiomeManager.GetSettings(type).IdealTemp, 2) +
-                                             MathF.Pow(h - BiomeManager.GetSettings(type).IdealHumidity, 2)) * 1.2f);
-
-                    if (influence > maxInfluence)
-                    {
-                        maxInfluence = influence;
-                        dominantBiome = type;
-                    }
-                }
-
-                // 3. Fill the column
                 for (int y = 0; y < Height; y++)
                 {
-                    if (y > surfaceY)
+                    if (y < finalSurface)
                     {
-                        // Water level check (if below SEA_LEVEL and no block, place water)
-                        if (y <= BiomeManager.SEA_LEVEL)
-                        {
-                            Blocks[x, y, z] = (byte)BlockType.Water;
-                        }
-                        else
-                        {
-                            Blocks[x, y, z] = (byte)BlockType.Air;
-                        }
+                        Blocks[x, y, z] = (y < finalSurface - 3) ? (byte)5 : fillerBlock;
                     }
-                    else if (y == surfaceY)
+                    else if (y == finalSurface)
                     {
-                        // Assign test blocks based on dominant biome
-                        Blocks[x, y, z] = dominantBiome switch
-                        {
-                            BiomeType.Plains => (byte)BlockType.Grass,
-                            BiomeType.Tundra => (byte)BlockType.Dirt,  // Testing requirement
-                            BiomeType.Mountains => (byte)BlockType.Mud, // Testing requirement
-                            BiomeType.Desert => (byte)BlockType.Stone,
-                            BiomeType.Forest => (byte)BlockType.CoarseDirt,
-                            _ => (byte)BlockType.Grass
-                        };
+                        Blocks[x, y, z] = surfaceBlock;
                     }
-                    else if (y > surfaceY - 4)
+                    else if (y <= BiomeManager.SEA_LEVEL && isWater)
                     {
-                        // Subsurface
-                        Blocks[x, y, z] = (byte)BlockType.Dirt;
+                        Blocks[x, y, z] = 3; // Water ID
                     }
                     else
                     {
-                        // Deep underground
-                        Blocks[x, y, z] = (byte)BlockType.Stone;
+                        Blocks[x, y, z] = 0; // Air
                     }
                 }
             }
@@ -320,7 +285,7 @@ public class Chunk
 
     private (Vector2 min, Vector2 max, Vector3 color) GetFaceData(byte type, string face, int w, int h)
     {
-        float atlasWidthTiles = 8f; // Total blocks in your atlas
+        float atlasWidthTiles = 9f; // Total blocks in your atlas
         float atlasHeightTiles = 1f;
 
         float uUnit = 1.0f / atlasWidthTiles;

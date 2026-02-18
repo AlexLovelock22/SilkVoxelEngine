@@ -100,7 +100,7 @@ class Program
 
         string vSource = Path.Combine("Shaders", "skybox.vert");
         string fSource = Path.Combine("Shaders", "skybox.frag");
-
+        //voxelWorld.ExportBiomeMap(2048);
         _quadMesh = new QuadMesh(Gl);
 
         _spriteShader = ShaderManager.CreateShaderProgram(
@@ -318,7 +318,7 @@ class Program
 
         // Increase this slightly (e.g., 2 or 3) if generation is too slow
         MeshManager.ProcessUploadQueue(Gl, _globalVoxelTexture, _renderChunks, _uploadQueue, voxelWorld);
-        
+
         player.Update(deltaTime, keyboard, voxelWorld);
         player.HandleInteraction(Input, voxelWorld, (float)deltaTime, Gl, _globalVoxelTexture);
         UpdatePerformanceCounters(deltaTime);
@@ -416,50 +416,48 @@ class Program
         Gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
     }
 
+    private static double _titleUpdateTimer;
+    private static double _fpsTimer;
+    private static double _lastFps;
+
     private static void UpdatePerformanceCounters(double deltaTime)
     {
         _timePassed += deltaTime;
+        _titleUpdateTimer += deltaTime;
+        _fpsTimer += deltaTime;
         _frameCount++;
 
-        if (_timePassed >= 1.0)
+        // 1. Calculate FPS once per second (for stability)
+        if (_fpsTimer >= 1.0)
         {
-            // 1. Basic Performance Metrics
-            double fps = _frameCount / _timePassed;
-            int chunkCount = _renderChunks.Count;
+            _lastFps = _frameCount / _fpsTimer;
+            _frameCount = 0;
+            _fpsTimer = 0;
+        }
 
-            // 2. Get Player Position
+        // 2. Update Title 60 times per second (~0.016s)
+        if (_titleUpdateTimer >= (1.0 / 60.0))
+        {
+            int chunkCount = _renderChunks.Count;
             Vector3 pos = player.GetEyePosition();
 
-            // 3. Sample Climate and Determine Biome
-            // We sample the noise at the player's X and Z coordinates
-            float t = (voxelWorld.TempNoise.GetNoise(pos.X, pos.Z) + 1f) / 2f;
-            float h = (voxelWorld.HumidityNoise.GetNoise(pos.X, pos.Z) + 1f) / 2f;
+            // Get the real-time biome matching the ruffled ground
+            BiomeType type = BiomeManager.GetBiomeAt(voxelWorld, pos.X, pos.Z);
+            string currentBiome = type.ToString();
 
-            string currentBiome = "Unknown";
-            float minDistance = float.MaxValue;
+            // Sample raw values (using the +1000 offset defined in BiomeManager)
+            float tRaw = voxelWorld.TempNoise.GetNoise(pos.X, pos.Z);
+            float hRaw = voxelWorld.HumidityNoise.GetNoise(pos.X + 1000, pos.Z + 1000);
+            float t = (tRaw + 1f) / 2f;
+            float h = (hRaw + 1f) / 2f;
 
-            // Find the biome with the closest matching "Ideal" parameters
-            foreach (BiomeType type in Enum.GetValues(typeof(BiomeType)))
-            {
-                var settings = BiomeManager.GetSettings(type);
-                float dist = MathF.Sqrt(MathF.Pow(t - settings.IdealTemp, 2) + MathF.Pow(h - settings.IdealHumidity, 2));
+            // 3. Update Window Title
+            window.Title = $"Voxel Engine | FPS: {_lastFps:F0} | " +
+                           $"Pos: ({pos.X:F1}, {pos.Y:F1}, {pos.Z:F1}) | " +
+                           $"Biome: {currentBiome} | T: {t:F2} H: {h:F2} | " +
+                           $"Chunks: {chunkCount}";
 
-                if (dist < minDistance)
-                {
-                    minDistance = dist;
-                    currentBiome = type.ToString();
-                }
-            }
-
-            // 4. Update Window Title with new information
-            window.Title = $"Voxel Engine | FPS: {fps:F0} | " +
-                           $"Pos: ({pos.X:F0}, {pos.Y:F0}, {pos.Z:F0}) | " +
-                           $"Biome: {currentBiome} | " +
-                           $"Chunks: {chunkCount} | Verts: {_totalVertexCount:N0}";
-
-            // Reset counters
-            _frameCount = 0;
-            _timePassed = 0;
+            _titleUpdateTimer = 0;
         }
     }
 

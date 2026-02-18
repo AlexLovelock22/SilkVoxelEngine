@@ -24,6 +24,7 @@ public class WorldManager
     }
     private void WorldStreamerLoop(Func<Vector3> getCameraPos)
     {
+        // Should be 31
         const int viewDistance = 31;
 
         while (true)

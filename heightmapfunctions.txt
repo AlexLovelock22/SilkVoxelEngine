@@ -1,0 +1,69 @@
+
+    public void ExportNoiseDebug(string path, int width, int height, float startX, float startZ)
+    {
+        using var image = new Image<L8>(width, height);
+
+        for (int z = 0; z < height; z++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                float wx = startX + x;
+                float wz = startZ + z;
+
+                // We sample raw coordinates because frequency is set in the constructor
+                float noiseValue = TempNoise.GetNoise(wx, wz);
+                byte byteValue = (byte)(Math.Clamp((noiseValue + 1f) / 2f, 0f, 1f) * 255);
+                image[x, z] = new L8(byteValue);
+            }
+        }
+        image.Save(path);
+    }
+
+    public void ExportBiomeMap(int imageSize)
+    {
+        using Image<Rgb24> image = new Image<Rgb24>(imageSize, imageSize);
+
+        for (int z = 0; z < imageSize; z++)
+        {
+            for (int x = 0; x < imageSize; x++)
+            {
+                float worldX = x - (imageSize / 2);
+                float worldZ = z - (imageSize / 2);
+
+                // Using the new unified sampling logic
+                float t = (TempNoise.GetNoise(worldX, worldZ) + 1f) / 2f;
+                float h = (HumidityNoise.GetNoise(worldX + 1000, worldZ + 1000) + 1f) / 2f;
+
+                image[x, z] = GetBiomeColor(t, h);
+            }
+        }
+        image.Save("BiomePreview_Organic.png");
+    }
+
+
+    private Rgb24 GetBiomeColor(float t, float h)
+    {
+        float minDistance = float.MaxValue;
+        Rgb24 bestColor = Color.Magenta;
+
+        foreach (BiomeType type in Enum.GetValues(typeof(BiomeType)))
+        {
+            var settings = BiomeManager.GetSettings(type);
+            float dist = MathF.Sqrt(MathF.Pow(t - settings.IdealTemp, 2) + MathF.Pow(h - settings.IdealHumidity, 2));
+
+            if (dist < minDistance)
+            {
+                minDistance = dist;
+                bestColor = type switch
+                {
+                    BiomeType.Desert => Color.Khaki,
+                    BiomeType.Forest => Color.ForestGreen,
+                    BiomeType.Mountains => Color.SlateGray,
+                    BiomeType.Plains => Color.LightGreen,
+                    BiomeType.Tundra => Color.AliceBlue,
+                    _ => Color.Gray
+                };
+            }
+        }
+        return bestColor;
+    }
