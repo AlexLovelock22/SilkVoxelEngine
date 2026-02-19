@@ -13,14 +13,14 @@ public static class BiomeManager
     {
         // 1. Global Decision Noise
         world.ContinentalNoise.SetSeed(seed);
-        world.ContinentalNoise.SetFrequency(0.00035f); 
+        world.ContinentalNoise.SetFrequency(0.00035f);
         world.ContinentalNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
         world.ContinentalNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
         world.ContinentalNoise.SetFractalOctaves(4);
         world.ContinentalNoise.SetFractalWeightedStrength(0.4f);
 
         world.ErosionNoise.SetSeed(seed + 10);
-        world.ErosionNoise.SetFrequency(0.01f); 
+        world.ErosionNoise.SetFrequency(0.01f);
         world.ErosionNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
 
         world.TempNoise.SetSeed(seed + 3);
@@ -33,7 +33,7 @@ public static class BiomeManager
 
         world.RiverNoise.SetSeed(seed + 4);
         world.RiverNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-        world.RiverNoise.SetFrequency(0.00022f); 
+        world.RiverNoise.SetFrequency(0.00022f);
         world.RiverNoise.SetFractalType(FastNoiseLite.FractalType.Ridged);
         world.RiverNoise.SetFractalOctaves(3);
 
@@ -45,22 +45,31 @@ public static class BiomeManager
     public static float GetHeightAt(VoxelWorld world, float wx, float wz)
     {
         BiomeType type = GetBiomeAt(world, wx, wz);
-        float baseHeight = SEA_LEVEL + 4f; 
+        float baseHeight = SEA_LEVEL + 4f;
 
         return type switch
         {
             BiomeType.Plains => baseHeight + PlainsBiome.GetHeight(wx, wz),
             BiomeType.Forest => baseHeight + ForestBiome.GetHeight(wx, wz),
-            BiomeType.Ocean  => SEA_LEVEL - 15f,
-            _                => baseHeight
+            BiomeType.Ocean => SEA_LEVEL - 15f,
+            _ => baseHeight
         };
     }
 
-    public static byte GetSurfaceBlock(BiomeType type) => type switch
+    public static byte GetSurfaceBlock(BiomeType type, float wx, float wz)
     {
-        BiomeType.Desert => 6, BiomeType.Tundra => 8, BiomeType.Mountains => 5,
-        BiomeType.Forest => 7, BiomeType.River => 4, BiomeType.Ocean => 6, _ => 1
-    };
+        return type switch
+        {
+            BiomeType.Desert => 6,
+            BiomeType.Tundra => 8,
+            BiomeType.Mountains => 5,
+            // UPDATED: Now calls the forest-specific jigsaw logic
+            BiomeType.Forest => ForestBiome.GetForestSurfaceBlock(wx, wz),
+            BiomeType.River => 4,
+            BiomeType.Ocean => 6,
+            _ => 1
+        };
+    }
 
     public static byte GetFillerBlock(BiomeType type) => 2;
 
@@ -68,7 +77,7 @@ public static class BiomeManager
     public static bool IsLocalWater(BiomeType type, float wx, float wz)
     {
         if (type == BiomeType.Ocean || type == BiomeType.River) return true;
-        
+
         if (type == BiomeType.Forest)
         {
             return ForestBiome.IsGully(wx, wz);
@@ -79,7 +88,7 @@ public static class BiomeManager
 
     public static BiomeType GetBiomeAt(VoxelWorld world, float wx, float wz)
     {
-        float oceanWarp = 22.0f; 
+        float oceanWarp = 22.0f;
         float rx = wx + world.ErosionNoise.GetNoise(wx, wz) * oceanWarp;
         float rz = wz + world.ErosionNoise.GetNoise(wx + 500, wz + 500) * oceanWarp;
 

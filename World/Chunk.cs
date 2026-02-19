@@ -46,39 +46,30 @@ public class Chunk
                 float heightSample = BiomeManager.GetHeightAt(world, worldX, worldZ);
                 int surfaceY = (int)Math.Clamp(heightSample, 0, Height - 1);
 
-                // Determine if this specific column contains water
                 bool isWaterColumn = BiomeManager.IsLocalWater(biome, worldX, worldZ);
-
-                // If it's water, the "soil" starts deeper, and the top is filled with water
                 int waterLevel = isWaterColumn ? surfaceY + 1 : -1;
-                int soilSurface = isWaterColumn ? surfaceY : surfaceY;
+                int finalSurface = isWaterColumn ? surfaceY : surfaceY;
 
                 if (surfaceY > _highestPoint) _highestPoint = surfaceY;
 
-                byte surfaceBlock = BiomeManager.GetSurfaceBlock(biome);
+                // UPDATED: Passing worldX and worldZ to GetSurfaceBlock
+                byte surfaceBlock = BiomeManager.GetSurfaceBlock(biome, worldX, worldZ);
                 byte fillerBlock = BiomeManager.GetFillerBlock(biome);
 
                 for (int y = 0; y < Height; y++)
                 {
-                    if (y < soilSurface)
+                    if (y < finalSurface)
                     {
-                        // Basic underground filling
-                        Blocks[x, y, z] = (y < soilSurface - 3) ? (byte)5 : fillerBlock;
+                        Blocks[x, y, z] = (y < finalSurface - 3) ? (byte)5 : fillerBlock;
                     }
-                    else if (y == soilSurface)
+                    else if (y == finalSurface)
                     {
-                        // If it's water, we might want sand/dirt under it instead of grass
+                        // In a water gully, we usually want dirt/sand (2) rather than moss/grass
                         Blocks[x, y, z] = isWaterColumn ? (byte)2 : surfaceBlock;
                     }
                     else if (isWaterColumn && y == waterLevel)
                     {
-                        // Place water block at the calculated local height
-                        Blocks[x, y, z] = 3; // Water ID
-                    }
-                    else if (y <= BiomeManager.SEA_LEVEL && (biome == BiomeType.Ocean || biome == BiomeType.River))
-                    {
-                        // Keep global sea level for actual oceans
-                        Blocks[x, y, z] = 3;
+                        Blocks[x, y, z] = 3; // Water
                     }
                     else
                     {
@@ -295,7 +286,7 @@ public class Chunk
 
     private (Vector2 min, Vector2 max, Vector3 color) GetFaceData(byte type, string face, int w, int h)
     {
-        float atlasWidthTiles = 9f; // Total blocks in your atlas
+        float atlasWidthTiles = 10f; // Total blocks in your atlas
         float atlasHeightTiles = 1f;
 
         float uUnit = 1.0f / atlasWidthTiles;
