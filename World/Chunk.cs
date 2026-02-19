@@ -42,14 +42,16 @@ public class Chunk
                 float worldX = (ChunkX * Size) + x;
                 float worldZ = (ChunkZ * Size) + z;
 
-                // One call to get the warped, ruffly biome result
                 BiomeType biome = BiomeManager.GetBiomeAt(world, worldX, worldZ);
-
                 float heightSample = BiomeManager.GetHeightAt(world, worldX, worldZ);
                 int surfaceY = (int)Math.Clamp(heightSample, 0, Height - 1);
 
-                bool isWater = (biome == BiomeType.Ocean || biome == BiomeType.River);
-                int finalSurface = isWater ? surfaceY - 4 : surfaceY;
+                // Determine if this specific column contains water
+                bool isWaterColumn = BiomeManager.IsLocalWater(biome, worldX, worldZ);
+
+                // If it's water, the "soil" starts deeper, and the top is filled with water
+                int waterLevel = isWaterColumn ? surfaceY + 1 : -1;
+                int soilSurface = isWaterColumn ? surfaceY : surfaceY;
 
                 if (surfaceY > _highestPoint) _highestPoint = surfaceY;
 
@@ -58,17 +60,25 @@ public class Chunk
 
                 for (int y = 0; y < Height; y++)
                 {
-                    if (y < finalSurface)
+                    if (y < soilSurface)
                     {
-                        Blocks[x, y, z] = (y < finalSurface - 3) ? (byte)5 : fillerBlock;
+                        // Basic underground filling
+                        Blocks[x, y, z] = (y < soilSurface - 3) ? (byte)5 : fillerBlock;
                     }
-                    else if (y == finalSurface)
+                    else if (y == soilSurface)
                     {
-                        Blocks[x, y, z] = surfaceBlock;
+                        // If it's water, we might want sand/dirt under it instead of grass
+                        Blocks[x, y, z] = isWaterColumn ? (byte)2 : surfaceBlock;
                     }
-                    else if (y <= BiomeManager.SEA_LEVEL && isWater)
+                    else if (isWaterColumn && y == waterLevel)
                     {
+                        // Place water block at the calculated local height
                         Blocks[x, y, z] = 3; // Water ID
+                    }
+                    else if (y <= BiomeManager.SEA_LEVEL && (biome == BiomeType.Ocean || biome == BiomeType.River))
+                    {
+                        // Keep global sea level for actual oceans
+                        Blocks[x, y, z] = 3;
                     }
                     else
                     {

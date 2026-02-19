@@ -12,14 +12,14 @@ public static class ForestBiome
         // Smooth, rolling forest floor
         MoundNoise.SetSeed(seed + 101);
         MoundNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-        MoundNoise.SetFrequency(0.006f); 
+        MoundNoise.SetFrequency(0.006f);
         MoundNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
         MoundNoise.SetFractalOctaves(3);
 
         // Gullies: Lower frequency (0.012) and single octave for clean, rare lines
         GullyNoise.SetSeed(seed + 102);
         GullyNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-        GullyNoise.SetFrequency(0.012f); 
+        GullyNoise.SetFrequency(0.012f);
         GullyNoise.SetFractalType(FastNoiseLite.FractalType.Ridged);
         GullyNoise.SetFractalOctaves(1);
     }
@@ -27,12 +27,12 @@ public static class ForestBiome
     public static float GetHeight(float wx, float wz)
     {
         float mounds = (MoundNoise.GetNoise(wx, wz) + 1f) / 2f;
-        float height = mounds * 4.0f; 
+        float height = mounds * 4.0f;
 
-        // If it's a gully, we drop the height by about 1.5 blocks
         if (IsGully(wx, wz))
         {
-            height -= 1.5f;
+            // We drop the terrain 1 block to make a "trench"
+            height -= 1.0f;
         }
 
         return height;
@@ -45,6 +45,6 @@ public static class ForestBiome
     {
         float gV = GullyNoise.GetNoise(wx, wz);
         // 0.94 is a very high threshold, making gullies quite rare and thin.
-        return gV > 0.94f; 
+        return gV > 0.94f;
     }
 }

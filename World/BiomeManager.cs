@@ -64,6 +64,19 @@ public static class BiomeManager
 
     public static byte GetFillerBlock(BiomeType type) => 2;
 
+    // NEW: Check if this specific spot should be water based on local features
+    public static bool IsLocalWater(BiomeType type, float wx, float wz)
+    {
+        if (type == BiomeType.Ocean || type == BiomeType.River) return true;
+        
+        if (type == BiomeType.Forest)
+        {
+            return ForestBiome.IsGully(wx, wz);
+        }
+
+        return false;
+    }
+
     public static BiomeType GetBiomeAt(VoxelWorld world, float wx, float wz)
     {
         float oceanWarp = 22.0f; 
