@@ -24,7 +24,7 @@ class Program
     private static IInputContext Input = null!;
     private static uint Shader;
     private static List<RenderChunk> _renderChunks = new List<RenderChunk>();
-    private static Player player = new Player(new Vector3(8, 100, 8));
+    private static Player player = new Player(new Vector3(8, 200, 8));
     private static Vector3 CameraPosition => player.GetEyePosition();
     private static Vector2 LastMousePos;
     private static double _timePassed;

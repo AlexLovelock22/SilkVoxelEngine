@@ -8,8 +8,6 @@ public enum BiomeType { Desert, Plains, Forest, Tundra, Mountains, Ocean, River 
 public static class BiomeManager
 {
     public const float SEA_LEVEL = 62f;
-    
-    // Width of the transition zone. Higher = wider, smoother blends.
     private const float BLEND_THRESHOLD = 0.05f; 
 
     public static void InitializeNoise(VoxelWorld world, int seed)
@@ -36,41 +34,54 @@ public static class BiomeManager
 
         world.RiverNoise.SetSeed(seed + 4);
         world.RiverNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-        world.RiverNoise.SetFrequency(0.00022f);
+        world.RiverNoise.SetFrequency(0.00022f); 
         world.RiverNoise.SetFractalType(FastNoiseLite.FractalType.Ridged);
         world.RiverNoise.SetFractalOctaves(3);
 
         // 2. Biome Shaping
         PlainsBiome.Initialize(seed);
         ForestBiome.Initialize(seed);
+        MountainsBiome.Initialize(seed);
     }
 
     public static float GetHeightAt(VoxelWorld world, float wx, float wz)
     {
-        // Get the raw noise values used for biome selection
         var (t, h, c) = GetBiomeNoiseValues(world, wx, wz);
-
         float baseHeight = SEA_LEVEL + 4f;
 
-        // 1. Handle Ocean transition
+        // 1. Ocean Floor
         if (c < -0.05f) return SEA_LEVEL - 15f;
 
-        // 2. Smoothly transition between Plains and Forest based on Humidity
-        // Our DetermineBiome uses h < 0.50f for Plains, else Forest.
-        // We calculate a weight around that 0.5f boundary.
+        // 2. Lowland Floor (Calculate the smooth floor first)
         float boundary = 0.50f;
         float hWeight = Math.Clamp((h - (boundary - BLEND_THRESHOLD)) / (BLEND_THRESHOLD * 2f), 0f, 1f);
-
         float plainsH = PlainsBiome.GetHeight(wx, wz);
         float forestH = ForestBiome.GetHeight(wx, wz);
+        float lowlandH = (plainsH * (1f - hWeight)) + (forestH * hWeight);
 
-        // Lerp the heights: 0 = Pure Plains, 1 = Pure Forest
-        float blendedHeight = (plainsH * (1f - hWeight)) + (forestH * hWeight);
+        // 3. Mountain Override Logic
+        float ridgeRaw = world.RiverNoise.GetNoise(wx, wz);
+        float mask = (world.TempNoise.GetNoise(wx * 0.1f, wz * 0.1f) + 1f) / 2f;
+        float targetMask = (t < 0.4f) ? 0.35f : 0.45f;
 
-        return baseHeight + blendedHeight;
+        // We use 0.45 as the start of the "Mountain Base" (The Skirt)
+        float mWeight = Math.Clamp((ridgeRaw - 0.45f) / 0.15f, 0f, 1f);
+        if (mask < targetMask) mWeight = 0;
+
+        // If we have mountain influence, override the lowland terrain
+        if (mWeight > 0)
+        {
+            float mountainH = MountainsBiome.GetHeight(wx, wz, ridgeRaw, mWeight);
+            
+            // LERP: Smoothly transition from lowland floor to mountain peak
+            // This ensures the mountain "lifts" the ground rather than being stuck on top
+            float finalOffset = (lowlandH * (1f - mWeight)) + (mountainH * mWeight);
+            return baseHeight + finalOffset;
+        }
+
+        return baseHeight + lowlandH;
     }
 
-    // Helper to extract noise logic so it's consistent between Height and Biome picking
     private static (float t, float h, float c) GetBiomeNoiseValues(VoxelWorld world, float wx, float wz)
     {
         float oceanWarp = 22.0f;
@@ -104,11 +115,8 @@ public static class BiomeManager
     {
         return type switch
         {
-            BiomeType.Desert => 6,
-            BiomeType.Tundra => 8,
             BiomeType.Mountains => 5,
             BiomeType.Forest => ForestBiome.GetForestSurfaceBlock(wx, wz),
-            BiomeType.River => 4,
             BiomeType.Ocean => 6,
             _ => 1
         };
@@ -128,6 +136,8 @@ public static class BiomeManager
         if (c < -0.05f) return BiomeType.Ocean;
 
         float targetMask = (t < 0.4f) ? 0.35f : 0.45f;
+        
+        // Mountain threshold at 0.58, but height blending starts at 0.45
         if (ridge > 0.58f && mask > targetMask) return BiomeType.Mountains;
 
         if (t < 0.42f) return (h < 0.55f) ? BiomeType.Tundra : BiomeType.Forest;
