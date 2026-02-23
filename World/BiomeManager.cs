@@ -8,6 +8,9 @@ public enum BiomeType { Desert, Plains, Forest, Tundra, Mountains, Ocean, River 
 public static class BiomeManager
 {
     public const float SEA_LEVEL = 62f;
+    
+    // Width of the transition zone. Higher = wider, smoother blends.
+    private const float BLEND_THRESHOLD = 0.05f; 
 
     public static void InitializeNoise(VoxelWorld world, int seed)
     {
@@ -44,49 +47,31 @@ public static class BiomeManager
 
     public static float GetHeightAt(VoxelWorld world, float wx, float wz)
     {
-        BiomeType type = GetBiomeAt(world, wx, wz);
+        // Get the raw noise values used for biome selection
+        var (t, h, c) = GetBiomeNoiseValues(world, wx, wz);
+
         float baseHeight = SEA_LEVEL + 4f;
 
-        return type switch
-        {
-            BiomeType.Plains => baseHeight + PlainsBiome.GetHeight(wx, wz),
-            BiomeType.Forest => baseHeight + ForestBiome.GetHeight(wx, wz),
-            BiomeType.Ocean => SEA_LEVEL - 15f,
-            _ => baseHeight
-        };
+        // 1. Handle Ocean transition
+        if (c < -0.05f) return SEA_LEVEL - 15f;
+
+        // 2. Smoothly transition between Plains and Forest based on Humidity
+        // Our DetermineBiome uses h < 0.50f for Plains, else Forest.
+        // We calculate a weight around that 0.5f boundary.
+        float boundary = 0.50f;
+        float hWeight = Math.Clamp((h - (boundary - BLEND_THRESHOLD)) / (BLEND_THRESHOLD * 2f), 0f, 1f);
+
+        float plainsH = PlainsBiome.GetHeight(wx, wz);
+        float forestH = ForestBiome.GetHeight(wx, wz);
+
+        // Lerp the heights: 0 = Pure Plains, 1 = Pure Forest
+        float blendedHeight = (plainsH * (1f - hWeight)) + (forestH * hWeight);
+
+        return baseHeight + blendedHeight;
     }
 
-    public static byte GetSurfaceBlock(BiomeType type, float wx, float wz)
-    {
-        return type switch
-        {
-            BiomeType.Desert => 6,
-            BiomeType.Tundra => 8,
-            BiomeType.Mountains => 5,
-            // UPDATED: Now calls the forest-specific jigsaw logic
-            BiomeType.Forest => ForestBiome.GetForestSurfaceBlock(wx, wz),
-            BiomeType.River => 4,
-            BiomeType.Ocean => 6,
-            _ => 1
-        };
-    }
-
-    public static byte GetFillerBlock(BiomeType type) => 2;
-
-    // NEW: Check if this specific spot should be water based on local features
-    public static bool IsLocalWater(BiomeType type, float wx, float wz)
-    {
-        if (type == BiomeType.Ocean || type == BiomeType.River) return true;
-
-        if (type == BiomeType.Forest)
-        {
-            return ForestBiome.IsGully(wx, wz);
-        }
-
-        return false;
-    }
-
-    public static BiomeType GetBiomeAt(VoxelWorld world, float wx, float wz)
+    // Helper to extract noise logic so it's consistent between Height and Biome picking
+    private static (float t, float h, float c) GetBiomeNoiseValues(VoxelWorld world, float wx, float wz)
     {
         float oceanWarp = 22.0f;
         float rx = wx + world.ErosionNoise.GetNoise(wx, wz) * oceanWarp;
@@ -99,10 +84,43 @@ public static class BiomeManager
         float c = world.ContinentalNoise.GetNoise(rx, rz);
         float t = (world.TempNoise.GetNoise(nbx, nbz) + 1f) / 2f;
         float h = (world.HumidityNoise.GetNoise(nbx + 1000, nbz + 1000) + 1f) / 2f;
+        
+        return (t, h, c);
+    }
+
+    public static BiomeType GetBiomeAt(VoxelWorld world, float wx, float wz)
+    {
+        var (t, h, c) = GetBiomeNoiseValues(world, wx, wz);
+        
+        float nbx = wx + world.ErosionNoise.GetNoise(wx, wz) * 8.0f;
+        float nbz = wz + world.ErosionNoise.GetNoise(wx + 500, wz + 500) * 8.0f;
         float ridge = world.RiverNoise.GetNoise(nbx, nbz);
         float mountainMask = (world.TempNoise.GetNoise(wx * 0.1f, wz * 0.1f) + 1f) / 2f;
 
         return DetermineBiome(t, h, c, ridge, mountainMask);
+    }
+
+    public static byte GetSurfaceBlock(BiomeType type, float wx, float wz)
+    {
+        return type switch
+        {
+            BiomeType.Desert => 6,
+            BiomeType.Tundra => 8,
+            BiomeType.Mountains => 5,
+            BiomeType.Forest => ForestBiome.GetForestSurfaceBlock(wx, wz),
+            BiomeType.River => 4,
+            BiomeType.Ocean => 6,
+            _ => 1
+        };
+    }
+
+    public static byte GetFillerBlock(BiomeType type) => 2;
+
+    public static bool IsLocalWater(BiomeType type, float wx, float wz)
+    {
+        if (type == BiomeType.Ocean || type == BiomeType.River) return true;
+        if (type == BiomeType.Forest) return ForestBiome.IsGully(wx, wz);
+        return false;
     }
 
     private static BiomeType DetermineBiome(float t, float h, float c, float ridge, float mask)
