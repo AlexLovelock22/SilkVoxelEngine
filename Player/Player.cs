@@ -25,8 +25,8 @@ public class Player
     public float LookSensitivity = 0.1f;
 
     private const float GRAVITY = -25f;
-    private const float JUMP_FORCE = 8.5f;
-    private const float WALK_SPEED = 50.0f;
+    private const float JUMP_FORCE = 15.5f;
+    private const float WALK_SPEED = 80.0f;
 
     private float _interactionCooldown = 0f;
     private const float COOLDOWN_TIME = 0.2f;

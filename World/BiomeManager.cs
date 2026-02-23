@@ -12,7 +12,6 @@ public static class BiomeManager
 
     public static void InitializeNoise(VoxelWorld world, int seed)
     {
-        // 1. Global Decision Noise
         world.ContinentalNoise.SetSeed(seed);
         world.ContinentalNoise.SetFrequency(0.00035f);
         world.ContinentalNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
@@ -22,15 +21,12 @@ public static class BiomeManager
 
         world.ErosionNoise.SetSeed(seed + 10);
         world.ErosionNoise.SetFrequency(0.01f);
-        world.ErosionNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
 
         world.TempNoise.SetSeed(seed + 3);
         world.TempNoise.SetFrequency(0.00008f);
-        world.TempNoise.SetFractalType(FastNoiseLite.FractalType.None);
 
         world.HumidityNoise.SetSeed(seed + 2);
         world.HumidityNoise.SetFrequency(0.0005f);
-        world.HumidityNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
 
         world.RiverNoise.SetSeed(seed + 4);
         world.RiverNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
@@ -38,7 +34,6 @@ public static class BiomeManager
         world.RiverNoise.SetFractalType(FastNoiseLite.FractalType.Ridged);
         world.RiverNoise.SetFractalOctaves(3);
 
-        // 2. Biome Shaping
         PlainsBiome.Initialize(seed);
         ForestBiome.Initialize(seed);
         MountainsBiome.Initialize(seed);
@@ -49,34 +44,26 @@ public static class BiomeManager
         var (t, h, c) = GetBiomeNoiseValues(world, wx, wz);
         float baseHeight = SEA_LEVEL + 4f;
 
-        // 1. Ocean Floor
         if (c < -0.05f) return SEA_LEVEL - 15f;
 
-        // 2. Lowland Floor (Calculate the smooth floor first)
+        // 1. Calculate floor
         float boundary = 0.50f;
         float hWeight = Math.Clamp((h - (boundary - BLEND_THRESHOLD)) / (BLEND_THRESHOLD * 2f), 0f, 1f);
-        float plainsH = PlainsBiome.GetHeight(wx, wz);
-        float forestH = ForestBiome.GetHeight(wx, wz);
-        float lowlandH = (plainsH * (1f - hWeight)) + (forestH * hWeight);
+        float lowlandH = (PlainsBiome.GetHeight(wx, wz) * (1f - hWeight)) + (ForestBiome.GetHeight(wx, wz) * hWeight);
 
-        // 3. Mountain Override Logic
+        // 2. Mountain Override
         float ridgeRaw = world.RiverNoise.GetNoise(wx, wz);
         float mask = (world.TempNoise.GetNoise(wx * 0.1f, wz * 0.1f) + 1f) / 2f;
         float targetMask = (t < 0.4f) ? 0.35f : 0.45f;
 
-        // We use 0.45 as the start of the "Mountain Base" (The Skirt)
-        float mWeight = Math.Clamp((ridgeRaw - 0.45f) / 0.15f, 0f, 1f);
+        // Tight lift blend starting at 0.50 to give the mountain more vertical "room"
+        float mWeight = Math.Clamp((ridgeRaw - 0.50f) / 0.10f, 0f, 1f);
         if (mask < targetMask) mWeight = 0;
 
-        // If we have mountain influence, override the lowland terrain
         if (mWeight > 0)
         {
-            float mountainH = MountainsBiome.GetHeight(wx, wz, ridgeRaw, mWeight);
-            
-            // LERP: Smoothly transition from lowland floor to mountain peak
-            // This ensures the mountain "lifts" the ground rather than being stuck on top
-            float finalOffset = (lowlandH * (1f - mWeight)) + (mountainH * mWeight);
-            return baseHeight + finalOffset;
+            float mountainH = MountainsBiome.GetHeight(wx, wz, ridgeRaw);
+            return baseHeight + (lowlandH * (1f - mWeight)) + (mountainH * mWeight);
         }
 
         return baseHeight + lowlandH;
@@ -102,23 +89,21 @@ public static class BiomeManager
     public static BiomeType GetBiomeAt(VoxelWorld world, float wx, float wz)
     {
         var (t, h, c) = GetBiomeNoiseValues(world, wx, wz);
-        
         float nbx = wx + world.ErosionNoise.GetNoise(wx, wz) * 8.0f;
         float nbz = wz + world.ErosionNoise.GetNoise(wx + 500, wz + 500) * 8.0f;
         float ridge = world.RiverNoise.GetNoise(nbx, nbz);
-        float mountainMask = (world.TempNoise.GetNoise(wx * 0.1f, wz * 0.1f) + 1f) / 2f;
+        float mask = (world.TempNoise.GetNoise(wx * 0.1f, wz * 0.1f) + 1f) / 2f;
 
-        return DetermineBiome(t, h, c, ridge, mountainMask);
+        return DetermineBiome(t, h, c, ridge, mask);
     }
 
     public static byte GetSurfaceBlock(BiomeType type, float wx, float wz)
     {
         return type switch
         {
-            BiomeType.Mountains => 5,
+            BiomeType.Mountains => 5, // Stone
             BiomeType.Forest => ForestBiome.GetForestSurfaceBlock(wx, wz),
-            BiomeType.Ocean => 6,
-            _ => 1
+            _ => 1 // Grass
         };
     }
 
@@ -137,11 +122,12 @@ public static class BiomeManager
 
         float targetMask = (t < 0.4f) ? 0.35f : 0.45f;
         
-        // Mountain threshold at 0.58, but height blending starts at 0.45
-        if (ridge > 0.58f && mask > targetMask) return BiomeType.Mountains;
+        // Increased threshold to 0.62. 
+        // This ensures the Stone biome is only applied to the sharp ridge peak, 
+        // while the lower "skirt" of the mountain remains grass (foothills).
+        if (ridge > 0.62f && mask > targetMask) return BiomeType.Mountains;
 
         if (t < 0.42f) return (h < 0.55f) ? BiomeType.Tundra : BiomeType.Forest;
-
         if (t > 0.58f)
         {
             if (h < 0.35f) return BiomeType.Desert;

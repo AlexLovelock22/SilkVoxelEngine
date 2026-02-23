@@ -7,43 +7,51 @@ public static class MountainsBiome
     private static readonly FastNoiseLite RidgeStructure = new FastNoiseLite();
     private static readonly FastNoiseLite SubRidgeNoise = new FastNoiseLite();
 
+    public const float LIFT_START = 0.50f; 
+
     public static void Initialize(int seed)
     {
-        // Controls the "Sub-Ridges" (the branching spurs)
         RidgeStructure.SetSeed(seed + 201);
         RidgeStructure.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-        RidgeStructure.SetFrequency(0.005f); 
+        RidgeStructure.SetFrequency(0.002f); 
         RidgeStructure.SetFractalType(FastNoiseLite.FractalType.Ridged);
-        RidgeStructure.SetFractalOctaves(3);
+        RidgeStructure.SetFractalOctaves(2);
 
-        // Fine Crags
         SubRidgeNoise.SetSeed(seed + 202);
         SubRidgeNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-        SubRidgeNoise.SetFrequency(0.018f);
+        SubRidgeNoise.SetFrequency(0.005f); 
         SubRidgeNoise.SetFractalType(FastNoiseLite.FractalType.Ridged);
     }
 
-    public static float GetHeight(float wx, float wz, float ridgeRaw, float mWeight)
+    public static float GetHeight(float wx, float wz, float ridgeRaw)
     {
-        // 1. The Main Peak & Ridge (Linear Trend)
-        // We normalize the ridge spline to a 0-1 range.
-        float mainRidge = Math.Clamp((ridgeRaw - 0.45f) / 0.55f, 0f, 1f);
+        // 1. Normalize the ridge (0.0 to 1.0)
+        float ridgeAlpha = Math.Clamp((ridgeRaw - LIFT_START) / (1.0f - LIFT_START), 0f, 1f);
         
-        // Linear gradient: The higher the ridgeRaw, the closer to the "Main Peak"
-        float linearBase = mainRidge * 120f; 
+        // 2. Sharpen the Spine (Fix for "flat areas")
+        // Increasing the power to 2.2 ensures the "peak" is narrow and tall.
+        // This prevents the "flat mountain biome" issue.
+        float ridgeLine = MathF.Pow(ridgeAlpha, 2.2f);
 
-        // 2. Sub-Ridgelines (The "Skirt")
-        // These are only visible when we are already on a mountain slope
+        // 3. Ridgeline Scaling
+        // We've increased the multiplier from 115 to 145 for taller peaks.
+        float verticalScale = 145f;
+
+        // 4. Skirt Tapering (Fix for Image 1)
+        // This ensures lone peaks spread their "feet" out to fill the biome.
+        float skirt = MathF.Sin(ridgeAlpha * MathF.PI * 0.5f); 
+
+        // 5. Structural Spurs (Branching ridges)
         float spurs = (RidgeStructure.GetNoise(wx, wz) + 1f) / 2f;
-        float subRidges = spurs * 30f * mainRidge;
+        
+        // Combine: Main Spine is dominant, spurs create the "direction" seen in Image 1.
+        float structure = (ridgeLine * 0.85f) + (spurs * 0.15f * skirt);
 
-        // 3. Erosion/Valleys
-        // We use the sub-ridges to "cut" into the mountain
-        float shape = linearBase + subRidges;
+        float elevation = structure * verticalScale;
+        
+        // Keep detail noise low to maintain the clean "Image 2" ridgeline shape
+        float details = SubRidgeNoise.GetNoise(wx, wz) * 5f * ridgeLine;
 
-        // 4. Craggy Details
-        float crags = SubRidgeNoise.GetNoise(wx, wz) * 10f * mainRidge;
-
-        return shape + crags;
+        return elevation + details;
     }
 }
