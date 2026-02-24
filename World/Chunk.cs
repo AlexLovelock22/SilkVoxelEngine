@@ -42,39 +42,25 @@ public class Chunk
                 float worldX = (ChunkX * Size) + x;
                 float worldZ = (ChunkZ * Size) + z;
 
+                // 1. Calculate height and biome ONCE per column to save CPU
+                float surfaceHeight = BiomeManager.GetHeightAt(world, worldX, worldZ);
                 BiomeType biome = BiomeManager.GetBiomeAt(world, worldX, worldZ);
-                float heightSample = BiomeManager.GetHeightAt(world, worldX, worldZ);
-                int surfaceY = (int)Math.Clamp(heightSample, 0, Height - 1);
 
-                bool isWaterColumn = BiomeManager.IsLocalWater(biome, worldX, worldZ);
-                int waterLevel = isWaterColumn ? surfaceY + 1 : -1;
-                int finalSurface = isWaterColumn ? surfaceY : surfaceY;
+                // 2. Update heightmap and tracking (explicitly casting to int)
+                _heightMap[x, z] = (int)surfaceHeight;
 
-                if (surfaceY > _highestPoint) _highestPoint = surfaceY;
+                if ((int)surfaceHeight > _highestPoint)
+                    _highestPoint = (int)surfaceHeight;
 
-                // UPDATED: Passing worldX and worldZ to GetSurfaceBlock
-                byte surfaceBlock = BiomeManager.GetSurfaceBlock(biome, worldX, worldZ);
-                byte fillerBlock = BiomeManager.GetFillerBlock(biome);
+                // Ensure the chunk's mesh boundary includes the sea level if it's an ocean
+                if ((int)BiomeManager.SEA_LEVEL > _highestPoint)
+                    _highestPoint = (int)BiomeManager.SEA_LEVEL;
 
+                // 3. Fill the vertical column
                 for (int y = 0; y < Height; y++)
                 {
-                    if (y < finalSurface)
-                    {
-                        Blocks[x, y, z] = (y < finalSurface - 3) ? (byte)5 : fillerBlock;
-                    }
-                    else if (y == finalSurface)
-                    {
-                        // In a water gully, we usually want dirt/sand (2) rather than moss/grass
-                        Blocks[x, y, z] = isWaterColumn ? (byte)2 : surfaceBlock;
-                    }
-                    else if (isWaterColumn && y == waterLevel)
-                    {
-                        Blocks[x, y, z] = 3; // Water
-                    }
-                    else
-                    {
-                        Blocks[x, y, z] = 0; // Air
-                    }
+                    // We pass the cached height and biome to avoid re-calculating noise 256 times
+                    Blocks[x, y, z] = BiomeManager.GetBlockAt(world, y, surfaceHeight, biome);
                 }
             }
         }

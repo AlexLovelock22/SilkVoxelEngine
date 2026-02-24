@@ -107,8 +107,12 @@ public class VoxelWorld
 
                     image[x, z] = type switch
                     {
-                        BiomeType.Ocean => new Rgba32(0, 0, 128),
-                        BiomeType.Land =>  new Rgba32(68, 191, 255),
+                        BiomeType.Ocean => new Rgba32(0, 0, 128),     // Deep Blue
+                        BiomeType.Desert => new Rgba32(237, 201, 175), // Sand/Beige
+                        BiomeType.Mountains => new Rgba32(100, 100, 100), // Dark Grey
+                        BiomeType.Forest => new Rgba32(0, 80, 0),     // Forest Green
+                        BiomeType.Tundra => new Rgba32(220, 240, 255), // Ice Blue
+                        BiomeType.Plains => new Rgba32(34, 139, 34),   // Grass Green
                         _ => new Rgba32(0, 0, 0)
                     };
                 }

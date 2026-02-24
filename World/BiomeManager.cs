@@ -7,7 +7,7 @@ using VoxelEngine_Silk.Net_1._0.World;
 
 namespace VoxelEngine_Silk.Net_1._0.World;
 
-public enum BiomeType { Ocean, Land }
+public enum BiomeType { Ocean, Desert, Plains, Mountains, Forest, Tundra }
 
 public static class BiomeManager
 {
@@ -15,38 +15,33 @@ public static class BiomeManager
 
     public static void InitializeNoise(VoxelWorld world, int seed)
     {
-        // 1. Continentalness: Defines the land/sea footprint.
+        // Continentalness: High octaves for jagged coastlines
         world.ContinentalNoise.SetSeed(seed);
-        world.ContinentalNoise.SetFrequency(0.00015f); 
+        world.ContinentalNoise.SetFrequency(0.0001f);
         world.ContinentalNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
         world.ContinentalNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
-        world.ContinentalNoise.SetFractalOctaves(10);
+        world.ContinentalNoise.SetFractalOctaves(9);
 
-        // 2. Erosion Selector: The "Director" for mountains.
+        // Erosion: High frequency for rugged detail
         world.ErosionNoise.SetSeed(seed + 101);
-        world.ErosionNoise.SetFrequency(0.0003f); 
+        world.ErosionNoise.SetFrequency(0.0008f);
         world.ErosionNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+        world.ErosionNoise.SetFractalOctaves(5);
 
-        // 3. The Peaks: Ridged noise for "Personality B".
+        // The Peaks: Ridged noise for jagged mountains
         world.RiverNoise.SetSeed(seed + 102);
         world.RiverNoise.SetFrequency(0.0007f);
         world.RiverNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
         world.RiverNoise.SetFractalType(FastNoiseLite.FractalType.Ridged);
-        world.RiverNoise.SetFractalOctaves(6); 
+        world.RiverNoise.SetFractalOctaves(6);
 
-        // 4. Micro-Terrain (New): This gives the "Smooth Land" its character.
-        // We use TempNoise as a placeholder for a 4th noise slot if you have it.
         world.TempNoise.SetSeed(seed + 202);
-        world.TempNoise.SetFrequency(0.002f); // Higher frequency = smaller, more frequent hills
-        world.TempNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
-        world.TempNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
-        world.TempNoise.SetFractalOctaves(4); // Adds that "weathered" look
+        world.TempNoise.SetFrequency(0.0001f);
+        world.HumidityNoise.SetSeed(seed + 303);
+        world.HumidityNoise.SetFrequency(0.0001f);
     }
 
-    private static float ApplyContinentalContrast(float noiseValue)
-    {
-        return MathF.Tanh(noiseValue * 3.0f); 
-    }
+    private static float ApplyContinentalContrast(float noiseValue) => MathF.Tanh(noiseValue * 3.0f);
 
     public static float GetHeightAt(VoxelWorld world, float wx, float wz)
     {
@@ -55,59 +50,110 @@ public static class BiomeManager
 
         if (continentalness < 0)
         {
-            return SEA_LEVEL + (continentalness * 30f);
+            // Ocean floor (Actual bed)
+            return SEA_LEVEL + (continentalness * 35f);
         }
         else
         {
-            float baseLandHeight = SEA_LEVEL + 4f;
-
-            // --- THE DISCONTINUITY BLEND ---
+            // --- RUGGEDNESS: DOMAIN WARPING ---
+            // Jitter the coordinates to break up the "conical" mountain look
+            float warpScale = 25.0f;
+            float warpX = world.ErosionNoise.GetNoise(wx * 1.2f, wz * 1.2f) * warpScale;
+            float warpZ = world.ErosionNoise.GetNoise(wz * 1.2f, wx * 1.2f) * warpScale;
 
             float erosionValue = world.ErosionNoise.GetNoise(wx, wz);
-            float cliffAlpha = Math.Clamp(MathF.Tanh(erosionValue * 4.0f) * 0.5f + 0.5f, 0, 1);
 
-            // PERSONALITY A: The Detailed Plains
-            // We use the new TempNoise here to create actual rolling character.
-            // We multiply by 8f to 12f to give it enough height to be noticeable.
-            float plainsDetail = world.TempNoise.GetNoise(wx, wz);
-            float plainsHeight = (plainsDetail + 1.0f) * 10f; 
+            // Beach Curve: Forces land to stay flat at the shore (0 to 1)
+            float beachCurve = MathF.Pow(Math.Clamp(continentalness * 7.0f, 0, 1), 2.5f);
 
-            // PERSONALITY B: The Jagged Peaks
-            float peaksHeight = (world.RiverNoise.GetNoise(wx, wz) + 1.0f) * 90f; 
+            float mountainMask = beachCurve * Math.Clamp(erosionValue + 0.4f, 0, 1);
+            float basePlains = 6f;
 
-            // Blend them together
-            float combinedHeight = Lerp(plainsHeight, peaksHeight, cliffAlpha);
+            // Warped peaks
+            float rawPeak = (world.RiverNoise.GetNoise(wx + warpX, wz + warpZ) + 1.0f) / 2.0f;
+            float peakNoise = MathF.Pow(rawPeak, 3.0f) * 120f;
 
-            return baseLandHeight + combinedHeight;
+            // Small crags for texture
+            float detail = world.ErosionNoise.GetNoise(wx * 4f, wz * 4f) * 4f;
+
+            float heightOffset = (basePlains + (peakNoise * mountainMask) + detail) * beachCurve;
+
+            return SEA_LEVEL + heightOffset;
         }
     }
 
-    private static float Lerp(float a, float b, float t) => a + (b - a) * t;
+    // IMPORTANT: Use this in your Chunk Loop to fix the water level
+    public static byte GetBlockAt(VoxelWorld world, int y, float surfaceHeight, BiomeType biome)
+    {
+        // 1. Air/Water Volume (Everything above the dirt/stone floor)
+        if (y > surfaceHeight)
+        {
+            // If we are below Sea Level but above the floor, it is solid Water.
+            if (y <= SEA_LEVEL) return 3; // Updated to Water ID 3
+
+            return 0; // Air
+        }
+
+        // 2. Surface Layer
+        if (y >= surfaceHeight - 1)
+        {
+            // Beach override: If near water, use sand (ID 6)
+            if (surfaceHeight <= SEA_LEVEL + 2.5f && biome != BiomeType.Desert)
+                return 6;
+
+            // Note: You may need to pass worldX/worldZ if your surface blocks use noise
+            return GetSurfaceBlock(biome, 0, 0);
+        }
+
+        // 3. Subsurface
+        return GetFillerBlock(biome);
+    }
 
     public static BiomeType GetBiomeAt(VoxelWorld world, float wx, float wz)
     {
-        float rawNoise = world.ContinentalNoise.GetNoise(wx, wz);
-        float continentalness = ApplyContinentalContrast(rawNoise);
-        return continentalness < 0 ? BiomeType.Ocean : BiomeType.Land;
+        float height = GetHeightAt(world, wx, wz);
+        float relativeHeight = height - SEA_LEVEL;
+
+        if (height <= SEA_LEVEL) return BiomeType.Ocean;
+
+        // "Fuzzy" mountain logic to avoid stone shelves
+        float erosionValue = world.ErosionNoise.GetNoise(wx, wz);
+        float stoneScore = (relativeHeight / 55f) + (erosionValue * 0.5f);
+
+        if (stoneScore > 0.72f) return BiomeType.Mountains;
+
+        float temp = (world.TempNoise.GetNoise(wx, wz) + 1f) / 2f;
+        float humidity = (world.HumidityNoise.GetNoise(wx, wz) + 1f) / 2f;
+
+        if (temp > 0.72f && humidity < 0.35f) return BiomeType.Desert;
+        if (temp < 0.32f) return BiomeType.Tundra;
+        if (humidity > 0.68f) return BiomeType.Forest;
+
+        return BiomeType.Plains;
     }
 
-    public static void ExportBiomeMap(VoxelWorld world, int size, string fileName)
+    public static byte GetSurfaceBlock(BiomeType type, float wx, float wz)
     {
-        using Image<Rgba32> image = new Image<Rgba32>(size, size);
-        for (int x = 0; x < size; x++)
+        return type switch
         {
-            for (int z = 0; z < size; z++)
-            {
-                BiomeType type = GetBiomeAt(world, x, z);
-                image[x, z] = type == BiomeType.Ocean ? new Rgba32(0, 0, 128) : new Rgba32(34, 139, 34);
-            }
-        }
-        string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fileName);
-        image.SaveAsPng(path);
-        Console.WriteLine($"Map exported to: {path}");
+            BiomeType.Ocean => 6,      // Sand
+            BiomeType.Desert => 6,     // Sand
+            BiomeType.Mountains => 5,  // Stone
+            BiomeType.Tundra => 8,     // Snow
+            BiomeType.Forest => 9,     // Moss
+            _ => 1                     // Grass
+        };
     }
 
-    public static byte GetSurfaceBlock(BiomeType type, float wx, float wz) => type == BiomeType.Ocean ? (byte)255 : (byte)1;
-    public static byte GetFillerBlock(BiomeType type) => 2;
+    public static byte GetFillerBlock(BiomeType type)
+    {
+        return type switch
+        {
+            BiomeType.Desert => 6,
+            BiomeType.Mountains => 5,
+            _ => 2 // Dirt
+        };
+    }
+
     public static bool IsLocalWater(BiomeType type, float wx, float wz) => type == BiomeType.Ocean;
 }

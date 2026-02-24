@@ -58,9 +58,9 @@ class Program
     static void Main(string[] args)
     {
         var options = WindowOptions.Default;
-        options.WindowState = WindowState.Maximized;
+        //options.WindowState = WindowState.Maximized;
         options.WindowBorder = WindowBorder.Resizable;
-        options.Size = new Vector2D<int>(1920, 1080);
+        options.Size = new Vector2D<int>(1600, 880);
         options.Title = "Voxel Engine - Multi-Chunk View";
         options.VSync = true;
 
@@ -101,6 +101,7 @@ class Program
         string vSource = Path.Combine("Shaders", "skybox.vert");
         string fSource = Path.Combine("Shaders", "skybox.frag");
         //voxelWorld.ExportBiomeMap(8048);
+        //voxelWorld.ExportBiomeMap(2048);
         _quadMesh = new QuadMesh(Gl);
 
         _spriteShader = ShaderManager.CreateShaderProgram(
@@ -119,7 +120,7 @@ class Program
         File.Delete("BiomePreview_Organic.png");
         File.Delete("temp_map.png");
 
-        // voxelWorld.ExportBiomeMap(2048);
+        
         //  voxelWorld.ExportNoiseDebug("temp_map.png", 1024, 1024, 0, 0);
         string vertexCode = Path.Combine("Shaders", "shader.vert");
         string fragmentCode = Path.Combine("Shaders", "shader.frag");
