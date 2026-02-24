@@ -1,69 +1,121 @@
+using System;
+using System.Collections.Generic;
+using VoxelEngine_Silk.Net_1._0.World;
 
-    public void ExportNoiseDebug(string path, int width, int height, float startX, float startZ)
+namespace VoxelEngine_Silk.Net_1._0.World;
+
+public enum BiomeType { Desert, Plains, Forest, Tundra, Mountains, Ocean }
+
+public static class BiomeManager
+{
+    public const float SEA_LEVEL = 62f;
+
+    public static void InitializeNoise(VoxelWorld world, int seed)
     {
-        using var image = new Image<L8>(width, height);
+        // 1. Continentalness: Large scale land/sea (Terrain First)
+        world.ContinentalNoise.SetSeed(seed);
+        world.ContinentalNoise.SetFrequency(0.0002f); 
+        world.ContinentalNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+        world.ContinentalNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
+        world.ContinentalNoise.SetFractalOctaves(4);
 
-        for (int z = 0; z < height; z++)
-        {
-            for (int x = 0; x < width; x++)
-            {
-                float wx = startX + x;
-                float wz = startZ + z;
+        // 2. Erosion: Used to create slopes and "ruffle" the heightmap
+        world.ErosionNoise.SetSeed(seed + 10);
+        world.ErosionNoise.SetFrequency(0.001f);
+        world.ErosionNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
 
-                // We sample raw coordinates because frequency is set in the constructor
-                float noiseValue = TempNoise.GetNoise(wx, wz);
-                byte byteValue = (byte)(Math.Clamp((noiseValue + 1f) / 2f, 0f, 1f) * 255);
-                image[x, z] = new L8(byteValue);
-            }
-        }
-        image.Save(path);
+        // 3. Peaks & Valleys: Independent mountain ranges
+        world.RiverNoise.SetSeed(seed + 4);
+        world.RiverNoise.SetFrequency(0.0006f);
+        world.RiverNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+        world.RiverNoise.SetFractalType(FastNoiseLite.FractalType.Ridged);
+
+        // 4. Climate: Only used as a lookup "label" after terrain is shaped
+        world.TempNoise.SetSeed(seed + 3);
+        world.TempNoise.SetFrequency(0.0001f); 
+        world.HumidityNoise.SetSeed(seed + 2);
+        world.HumidityNoise.SetFrequency(0.0001f);
+
+        PlainsBiome.Initialize(seed);
+        ForestBiome.Initialize(seed);
+        MountainsBiome.Initialize(seed);
     }
 
-    public void ExportBiomeMap(int imageSize)
+    public static float GetHeightAt(VoxelWorld world, float wx, float wz)
     {
-        using Image<Rgb24> image = new Image<Rgb24>(imageSize, imageSize);
+        // STEP 1: Generate a global heightmap (Terrain First)
+        float continentalness = world.ContinentalNoise.GetNoise(wx, wz);
+        float erosion = world.ErosionNoise.GetNoise(wx, wz);
+        float pv = world.RiverNoise.GetNoise(wx, wz);
 
-        for (int z = 0; z < imageSize; z++)
+        // Calculate base height based on Continentalness
+        float height = SEA_LEVEL;
+
+        if (continentalness < -0.1f) 
         {
-            for (int x = 0; x < imageSize; x++)
-            {
-                float worldX = x - (imageSize / 2);
-                float worldZ = z - (imageSize / 2);
-
-                // Using the new unified sampling logic
-                float t = (TempNoise.GetNoise(worldX, worldZ) + 1f) / 2f;
-                float h = (HumidityNoise.GetNoise(worldX + 1000, worldZ + 1000) + 1f) / 2f;
-
-                image[x, z] = GetBiomeColor(t, h);
-            }
+            // Ocean Depths
+            height += (continentalness + 0.1f) * 30f;
         }
-        image.Save("BiomePreview_Organic.png");
+        else 
+        {
+            // Land: Start with a base elevation
+            height += 4f;
+
+            // Add Mountain Ranges (Terrain shaping independent of biome)
+            if (pv > 0.5f && continentalness > 0.05f)
+            {
+                float mountainWeight = Math.Clamp((pv - 0.5f) * 2f, 0, 1);
+                height += MountainsBiome.GetHeight(wx, wz, pv) * mountainWeight;
+            }
+
+            // Add rolling hills from Erosion
+            height += erosion * 10f;
+        }
+
+        return height;
     }
 
-
-    private Rgb24 GetBiomeColor(float t, float h)
+    public static BiomeType GetBiomeAt(VoxelWorld world, float wx, float wz)
     {
-        float minDistance = float.MaxValue;
-        Rgb24 bestColor = Color.Magenta;
+        // STEP 2: Determine Biome based on the existing terrain (Biome Second)
+        float continentalness = world.ContinentalNoise.GetNoise(wx, wz);
+        
+        // If it's underwater, it's an ocean. Period.
+        if (continentalness < -0.1f) return BiomeType.Ocean;
 
-        foreach (BiomeType type in Enum.GetValues(typeof(BiomeType)))
-        {
-            var settings = BiomeManager.GetSettings(type);
-            float dist = MathF.Sqrt(MathF.Pow(t - settings.IdealTemp, 2) + MathF.Pow(h - settings.IdealHumidity, 2));
+        // Sample climate
+        float t = (world.TempNoise.GetNoise(wx, wz) + 1f) / 2f;
+        float h = (world.HumidityNoise.GetNoise(wx, wz) + 1f) / 2f;
+        float pv = world.RiverNoise.GetNoise(wx, wz);
 
-            if (dist < minDistance)
-            {
-                minDistance = dist;
-                bestColor = type switch
-                {
-                    BiomeType.Desert => Color.Khaki,
-                    BiomeType.Forest => Color.ForestGreen,
-                    BiomeType.Mountains => Color.SlateGray,
-                    BiomeType.Plains => Color.LightGreen,
-                    BiomeType.Tundra => Color.AliceBlue,
-                    _ => Color.Gray
-                };
-            }
-        }
-        return bestColor;
+        // If the terrain is already very high, label it a mountain
+        if (pv > 0.7f && continentalness > 0.1f) return BiomeType.Mountains;
+
+        // Otherwise, classify based on climate matrix (Minecraft style)
+        if (t < 0.4f) return BiomeType.Tundra;
+        if (t > 0.7f && h < 0.4f) return BiomeType.Desert;
+        if (h > 0.6f) return BiomeType.Forest;
+
+        return BiomeType.Plains;
     }
+
+    public static byte GetSurfaceBlock(BiomeType type, float wx, float wz)
+    {
+        return type switch
+        {
+            BiomeType.Mountains => 5, // Stone
+            BiomeType.Forest => ForestBiome.GetForestSurfaceBlock(wx, wz),
+            BiomeType.Desert => 4,    // Sand
+            BiomeType.Tundra => 11,   // Snow
+            _ => 1                    // Grass
+        };
+    }
+
+    public static byte GetFillerBlock(BiomeType type) => 2;
+
+    public static bool IsLocalWater(BiomeType type, float wx, float wz) => type == BiomeType.Ocean;
+
+    
+}
+
+
