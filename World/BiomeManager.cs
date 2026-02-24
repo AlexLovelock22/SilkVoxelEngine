@@ -15,25 +15,26 @@ public static class BiomeManager
 
     public static void InitializeNoise(VoxelWorld world, int seed)
     {
-        // Continentalness: High octaves for jagged coastlines
+        // Continentalness: Smoother frequency for larger landmasses
         world.ContinentalNoise.SetSeed(seed);
-        world.ContinentalNoise.SetFrequency(0.0001f);
+        world.ContinentalNoise.SetFrequency(0.00008f); 
         world.ContinentalNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
         world.ContinentalNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
-        world.ContinentalNoise.SetFractalOctaves(9);
+        world.ContinentalNoise.SetFractalOctaves(7);
 
-        // Erosion: High frequency for rugged detail
+        // Erosion: Used for the "Ruffle" and shelf structure
         world.ErosionNoise.SetSeed(seed + 101);
-        world.ErosionNoise.SetFrequency(0.0008f);
+        world.ErosionNoise.SetFrequency(0.0006f); 
         world.ErosionNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
+        world.ErosionNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
         world.ErosionNoise.SetFractalOctaves(5);
 
-        // The Peaks: Ridged noise for jagged mountains
+        // The Peaks: Ridged noise for the "Proud" structure
         world.RiverNoise.SetSeed(seed + 102);
-        world.RiverNoise.SetFrequency(0.0007f);
+        world.RiverNoise.SetFrequency(0.0008f); 
         world.RiverNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
         world.RiverNoise.SetFractalType(FastNoiseLite.FractalType.Ridged);
-        world.RiverNoise.SetFractalOctaves(6);
+        world.RiverNoise.SetFractalOctaves(6); 
 
         world.TempNoise.SetSeed(seed + 202);
         world.TempNoise.SetFrequency(0.0001f);
@@ -41,7 +42,7 @@ public static class BiomeManager
         world.HumidityNoise.SetFrequency(0.0001f);
     }
 
-    private static float ApplyContinentalContrast(float noiseValue) => MathF.Tanh(noiseValue * 3.0f);
+    private static float ApplyContinentalContrast(float noiseValue) => MathF.Tanh(noiseValue * 3.5f);
 
     public static float GetHeightAt(VoxelWorld world, float wx, float wz)
     {
@@ -50,62 +51,59 @@ public static class BiomeManager
 
         if (continentalness < 0)
         {
-            // Ocean floor (Actual bed)
-            return SEA_LEVEL + (continentalness * 35f);
+            return SEA_LEVEL + (continentalness * 40f);
         }
         else
         {
-            // --- RUGGEDNESS: DOMAIN WARPING ---
-            // Jitter the coordinates to break up the "conical" mountain look
-            float warpScale = 25.0f;
-            float warpX = world.ErosionNoise.GetNoise(wx * 1.2f, wz * 1.2f) * warpScale;
-            float warpZ = world.ErosionNoise.GetNoise(wz * 1.2f, wx * 1.2f) * warpScale;
+            // --- DOMAIN WARPING (The "Ruffle") ---
+            // Shifting coordinates slightly to create jagged, non-conical slopes
+            float warpScale = 45.0f; // Higher scale = more twisted rock formations
+            float warpX = world.ErosionNoise.GetNoise(wx * 1.5f, wz * 1.5f) * warpScale;
+            float warpZ = world.ErosionNoise.GetNoise(wz * 1.5f, wx * 1.5f) * warpScale;
 
             float erosionValue = world.ErosionNoise.GetNoise(wx, wz);
-
-            // Beach Curve: Forces land to stay flat at the shore (0 to 1)
-            float beachCurve = MathF.Pow(Math.Clamp(continentalness * 7.0f, 0, 1), 2.5f);
-
-            float mountainMask = beachCurve * Math.Clamp(erosionValue + 0.4f, 0, 1);
-            float basePlains = 6f;
-
-            // Warped peaks
+            
+            // --- PROUD STRUCTURE ---
+            // We use the ridged noise with the warped coordinates
             float rawPeak = (world.RiverNoise.GetNoise(wx + warpX, wz + warpZ) + 1.0f) / 2.0f;
-            float peakNoise = MathF.Pow(rawPeak, 3.0f) * 120f;
+            
+            // Squashes the valleys but makes the tops extremely tall/steep
+            float proudPeaks = MathF.Pow(rawPeak, 3.5f) * 145f; 
 
-            // Small crags for texture
-            float detail = world.ErosionNoise.GetNoise(wx * 4f, wz * 4f) * 4f;
+            // --- THE SHELF EFFECT (Ruffle) ---
+            // Adding a "staircase" effect to the slopes using erosion
+            float shelfDetail = MathF.Abs(world.ErosionNoise.GetNoise(wx * 3f, wz * 3f)) * 8f;
 
-            float heightOffset = (basePlains + (peakNoise * mountainMask) + detail) * beachCurve;
+            // Beach Curve
+            float beachCurve = MathF.Pow(Math.Clamp(continentalness * 8.0f, 0, 1), 2.0f);
+            
+            // Masking mountains so they only appear inland
+            float mountainMask = beachCurve * Math.Clamp(erosionValue + 0.5f, 0, 1);
+            
+            float basePlains = 5f;
+            float totalHeight = (basePlains + (proudPeaks * mountainMask) + (shelfDetail * mountainMask)) * beachCurve;
 
-            return SEA_LEVEL + heightOffset;
+            return SEA_LEVEL + totalHeight;
         }
     }
 
-    // IMPORTANT: Use this in your Chunk Loop to fix the water level
     public static byte GetBlockAt(VoxelWorld world, int y, float surfaceHeight, BiomeType biome)
     {
-        // 1. Air/Water Volume (Everything above the dirt/stone floor)
         if (y > surfaceHeight)
         {
-            // If we are below Sea Level but above the floor, it is solid Water.
-            if (y <= SEA_LEVEL) return 3; // Updated to Water ID 3
-
-            return 0; // Air
+            if (y <= SEA_LEVEL) return 3; 
+            return 0; 
         }
 
-        // 2. Surface Layer
         if (y >= surfaceHeight - 1)
         {
-            // Beach override: If near water, use sand (ID 6)
-            if (surfaceHeight <= SEA_LEVEL + 2.5f && biome != BiomeType.Desert)
+            // Beach Check
+            if (surfaceHeight <= SEA_LEVEL + 1.8f && biome != BiomeType.Desert)
                 return 6;
 
-            // Note: You may need to pass worldX/worldZ if your surface blocks use noise
             return GetSurfaceBlock(biome, 0, 0);
         }
 
-        // 3. Subsurface
         return GetFillerBlock(biome);
     }
 
@@ -116,11 +114,13 @@ public static class BiomeManager
 
         if (height <= SEA_LEVEL) return BiomeType.Ocean;
 
-        // "Fuzzy" mountain logic to avoid stone shelves
         float erosionValue = world.ErosionNoise.GetNoise(wx, wz);
-        float stoneScore = (relativeHeight / 55f) + (erosionValue * 0.5f);
+        
+        // Stone starts appearing based on height and ruggedness
+        // Lowering the divisor to 45 makes mountains appear more easily
+        float stoneScore = (relativeHeight / 45f) + (erosionValue * 0.55f);
 
-        if (stoneScore > 0.72f) return BiomeType.Mountains;
+        if (stoneScore > 0.65f) return BiomeType.Mountains;
 
         float temp = (world.TempNoise.GetNoise(wx, wz) + 1f) / 2f;
         float humidity = (world.HumidityNoise.GetNoise(wx, wz) + 1f) / 2f;
@@ -136,12 +136,12 @@ public static class BiomeManager
     {
         return type switch
         {
-            BiomeType.Ocean => 6,      // Sand
-            BiomeType.Desert => 6,     // Sand
-            BiomeType.Mountains => 5,  // Stone
-            BiomeType.Tundra => 8,     // Snow
-            BiomeType.Forest => 9,     // Moss
-            _ => 1                     // Grass
+            BiomeType.Ocean => 6,
+            BiomeType.Desert => 6,
+            BiomeType.Mountains => 5, // Stone
+            BiomeType.Tundra => 8,
+            BiomeType.Forest => 9,
+            _ => 1
         };
     }
 
@@ -151,7 +151,7 @@ public static class BiomeManager
         {
             BiomeType.Desert => 6,
             BiomeType.Mountains => 5,
-            _ => 2 // Dirt
+            _ => 2
         };
     }
 
