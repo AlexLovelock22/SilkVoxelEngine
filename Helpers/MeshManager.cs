@@ -54,7 +54,7 @@ public static class MeshManager
             {
                 rc = new RenderChunk { WorldPosition = new Vector3(chunk.ChunkX * 16, 0, chunk.ChunkZ * 16) };
                 renderChunks.Add(rc);
-                Console.WriteLine($"[MainThread]: Created New Mesh ({chunk.ChunkX}, {chunk.ChunkZ}) | Total Meshes: {renderChunks.Count}");
+                //Console.WriteLine($"[MainThread]: Created New Mesh ({chunk.ChunkX}, {chunk.ChunkZ}) | Total Meshes: {renderChunks.Count}");
             }
 
             UploadToVAO(ref rc.OpaqueVAO, ref rc.OpaqueVBO, meshData.opaque, out rc.OpaqueVertexCount, gl);

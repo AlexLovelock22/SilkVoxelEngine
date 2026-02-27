@@ -58,7 +58,7 @@ class Program
     static void Main(string[] args)
     {
         var options = WindowOptions.Default;
-        //options.WindowState = WindowState.Maximized;
+        options.WindowState = WindowState.Maximized;
         options.WindowBorder = WindowBorder.Resizable;
         options.Size = new Vector2D<int>(1600, 880);
         options.Title = "Voxel Engine - Multi-Chunk View";
