@@ -92,7 +92,7 @@ public class Player
         UpdateCameraVectors();
         Vector3 moveDir = GetInputDirection(keyboard);
 
-        float currentMaxSpeed = IsFlying ? 60.0f : (WALK_SPEED * 1.6f);
+        float currentMaxSpeed = IsFlying ? 600.0f : (WALK_SPEED * 1.6f);
         float swimSpeed = WALK_SPEED * 0.85f;
 
         // 3. Apply Vertical Physics

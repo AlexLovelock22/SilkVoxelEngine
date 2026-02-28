@@ -92,32 +92,40 @@ public class VoxelWorld
     }
 
     public void ExportBiomeMap(int size)
+{
+    using (Image<Rgba32> image = new Image<Rgba32>(size, size))
     {
-        using (Image<Rgba32> image = new Image<Rgba32>(size, size))
+        // Parallel.For distributes the work across all available CPU threads
+        Parallel.For(0, size, x =>
         {
-            for (int x = 0; x < size; x++)
+            image.ProcessPixelRows(accessor =>
             {
+                // Access the specific row for this X coordinate
+                Span<Rgba32> pixelRow = accessor.GetRowSpan(x);
+
                 for (int z = 0; z < size; z++)
                 {
                     float worldX = x - (size / 2);
                     float worldZ = z - (size / 2);
 
-                    // FIX: Use the exact same 3-arg method as Chunk.cs
+                    // Call the terrain-aware BiomeManager
                     BiomeType type = BiomeManager.GetBiomeAt(this, worldX, worldZ);
 
-                    image[x, z] = type switch
+                    pixelRow[z] = type switch
                     {
-                        BiomeType.Ocean => new Rgba32(0, 0, 128),     // Deep Blue
+                        BiomeType.Ocean => new Rgba32(0, 0, 128),      // Deep Blue
                         BiomeType.Desert => new Rgba32(237, 201, 175), // Sand/Beige
                         BiomeType.Mountains => new Rgba32(100, 100, 100), // Dark Grey
-                        BiomeType.Forest => new Rgba32(0, 80, 0),     // Forest Green
+                        BiomeType.Forest => new Rgba32(0, 80, 0),      // Forest Green
                         BiomeType.Tundra => new Rgba32(220, 240, 255), // Ice Blue
-                        BiomeType.Plains => new Rgba32(34, 139, 34),   // Grass Green
+                        BiomeType.Plains => new Rgba32(34, 139, 34),    // Grass Green
                         _ => new Rgba32(0, 0, 0)
                     };
                 }
-            }
-            image.Save("WorldBiomeMap.png");
-        }
+            });
+        });
+
+        image.Save("WorldBiomeMap.png");
     }
+}
 }

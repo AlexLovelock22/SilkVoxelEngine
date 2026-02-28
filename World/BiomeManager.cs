@@ -21,7 +21,7 @@ public static class BiomeManager
         world.ContinentalNoise.SetFrequency(0.00008f);
         world.ContinentalNoise.SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2);
         world.ContinentalNoise.SetFractalType(FastNoiseLite.FractalType.FBm);
-        world.ContinentalNoise.SetFractalOctaves(7);
+        world.ContinentalNoise.SetFractalOctaves(9);
 
         // Erosion: Used for the "Ruffle" and shelf structure
         world.ErosionNoise.SetSeed(seed + 101);
@@ -73,7 +73,7 @@ public static class BiomeManager
 
     private static float ApplyContinentalContrast(float noiseValue) => MathF.Tanh(noiseValue * 3.5f);
 
-  
+
 
     public static byte GetBlockAt(VoxelWorld world, int y, float surfaceHeight, BiomeType biome)
     {
@@ -95,7 +95,7 @@ public static class BiomeManager
         return GetFillerBlock(biome);
     }
 
-   public static float GetHeightAt(VoxelWorld world, float wx, float wz)
+    public static float GetHeightAt(VoxelWorld world, float wx, float wz)
     {
         // Fix the (0,0) pillar artifact
         wx += 0.001f;
@@ -112,7 +112,7 @@ public static class BiomeManager
         {
             float temp = (world.TempNoise.GetNoise(wx, wz) + 1f) / 2f;
             float humidity = (world.HumidityNoise.GetNoise(wx, wz) + 1f) / 2f;
-            
+
             // 1. MATCHING THRESHOLDS
             // We use the exact same logic as GetBiomeAt. 
             // Any area outside this "Box" will have 0 desertInfluence.
@@ -137,7 +137,7 @@ public static class BiomeManager
             float warpZ = world.ErosionNoise.GetNoise(wz * 1.5f, wx * 1.5f) * warpScale;
             float erosionValue = world.ErosionNoise.GetNoise(wx, wz);
             float rawPeak = (world.RiverNoise.GetNoise(wx + warpX, wz + warpZ) + 1.0f) / 2.0f;
-            float proudPeaks = MathF.Pow(rawPeak, 3.5f) * 145f; 
+            float proudPeaks = MathF.Pow(rawPeak, 3.5f) * 145f;
             float shelfDetail = MathF.Abs(world.ErosionNoise.GetNoise(wx * 3f, wz * 3f)) * 8f;
             float mountainHeight = (proudPeaks + shelfDetail) * Math.Clamp(erosionValue + 0.5f, 0, 1);
 
@@ -156,21 +156,48 @@ public static class BiomeManager
 
     public static BiomeType GetBiomeAt(VoxelWorld world, float wx, float wz)
     {
+        // 1. Get physical height for the hard Ocean mask
         float height = GetHeightAt(world, wx, wz);
         if (height <= SEA_LEVEL) return BiomeType.Ocean;
 
-        float temp = (world.TempNoise.GetNoise(wx, wz) + 1f) / 2f;
-        float humidity = (world.HumidityNoise.GetNoise(wx, wz) + 1f) / 2f;
+        // 2. THE RUFFLE (Your preferred high-frequency settings)
+        float ruffleFreq = 40.1f;
+        float ruffleAmp = 15.0f;
+        float jitterX = world.ErosionNoise.GetNoise(wx * ruffleFreq, wz * ruffleFreq) * ruffleAmp;
+        float jitterZ = world.ErosionNoise.GetNoise(wz * ruffleFreq, (wx + 123) * ruffleFreq) * ruffleAmp;
 
-        // 6. SYNCED CHECK
-        // This must match the 'isDesertZone' logic in GetHeightAt exactly.
-        if (temp > 0.72f && humidity < 0.35f) return BiomeType.Desert;
+        // Sample climate with the ruffled coordinates
+        float temp = (world.TempNoise.GetNoise(wx + jitterX, wz + jitterZ) + 1f) / 2f;
+        float humidity = (world.HumidityNoise.GetNoise(wx + jitterX, wz + jitterZ) + 1f) / 2f;
 
+        // 3. CLIMATE PRE-CHECK
+        bool isDesert = temp > 0.72f && humidity < 0.35f;
         float relativeHeight = height - SEA_LEVEL;
-        float erosionValue = world.ErosionNoise.GetNoise(wx, wz);
-        float stoneScore = (relativeHeight / 45f) + (erosionValue * 0.55f);
 
-        if (stoneScore > 0.65f) return BiomeType.Mountains;
+        // 4. MOUNTAIN LOGIC WITH MINIMUM SIZE MASK
+        // Sampling Erosion at a very low frequency creates broad "Mountain Regions"
+        // This prevents tiny isolated mountain blotches.
+        float mountainRegionMask = world.ErosionNoise.GetNoise(wx * 0.005f, wz * 0.005f);
+
+        // Height Ruffle: Makes the bottom edge of mountains jagged
+        float baseRuffle = world.ErosionNoise.GetNoise(wx * 0.2f, wz * 0.2f) * 10f;
+        float erosionValue = Math.Abs(world.ErosionNoise.GetNoise(wx, wz));
+
+        // Ruggedness Score: Higher weight on erosion to capture full peaks
+        float ruggedness = (erosionValue * 0.9f) + (relativeHeight / 80f);
+
+        // MOUNTAIN CONDITIONS:
+        // - Must not be desert
+        // - Ruggedness must be high (increased sensitivity)
+        // - Must be within a "Mountain Region" (mountainRegionMask > -0.1f)
+        // - Must be above the ruffled base height
+        if (!isDesert && ruggedness > 0.32f && mountainRegionMask > -0.1f && relativeHeight > (15f + baseRuffle))
+        {
+            return BiomeType.Mountains;
+        }
+
+        // 5. FINAL BIOME SELECTION
+        if (isDesert) return BiomeType.Desert;
         if (temp < 0.32f) return BiomeType.Tundra;
         if (humidity > 0.68f) return BiomeType.Forest;
 
