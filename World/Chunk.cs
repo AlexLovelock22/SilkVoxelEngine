@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using SixLabors.ImageSharp.Processing;
+using System.Diagnostics;
 
 namespace VoxelEngine_Silk.Net_1._0.World;
 
@@ -33,47 +34,43 @@ public class Chunk
 
     private void GenerateTerrain(VoxelWorld world)
     {
+        Stopwatch sw = Stopwatch.StartNew();
         _highestPoint = 0;
+
+        // 1. Grab the batch data
+        var noiseMap = BiomeManager.GetNoiseMap(world, ChunkX, ChunkZ);
+
+        // 2. We can peek at the center of the chunk (8,8) to get a representative biome for the log
+        BiomeType representativeBiome = noiseMap.Biomes[8, 8];
 
         for (int x = 0; x < Size; x++)
         {
             for (int z = 0; z < Size; z++)
             {
-                float worldX = (ChunkX * Size) + x;
-                float worldZ = (ChunkZ * Size) + z;
+                float surfaceHeight = noiseMap.Heights[x, z];
+                BiomeType biome = noiseMap.Biomes[x, z];
 
-                // 1. Calculate height and biome ONCE per column to save CPU
-                float surfaceHeight = BiomeManager.GetHeightAt(world, worldX, worldZ);
-                BiomeType biome = BiomeManager.GetBiomeAt(world, worldX, worldZ);
-
-                // 2. Update heightmap and tracking (explicitly casting to int)
                 _heightMap[x, z] = (int)surfaceHeight;
 
                 if ((int)surfaceHeight > _highestPoint)
                     _highestPoint = (int)surfaceHeight;
 
-                // Ensure the chunk's mesh boundary includes the sea level if it's an ocean
                 if ((int)BiomeManager.SEA_LEVEL > _highestPoint)
                     _highestPoint = (int)BiomeManager.SEA_LEVEL;
 
-                // 3. Fill the vertical column
                 for (int y = 0; y < Height; y++)
                 {
-                    // We pass the cached height and biome to avoid re-calculating noise 256 times
                     Blocks[x, y, z] = BiomeManager.GetBlockAt(world, y, surfaceHeight, biome);
                 }
             }
         }
-    }
 
-    private byte SetBlockType(int y, int height)
-    {
-        if (y > height) return y <= (int)BiomeManager.SEA_LEVEL ? (byte)BlockType.Water : (byte)BlockType.Air;
-        if (y == height) return y <= (int)BiomeManager.SEA_LEVEL - 1 ? (byte)BlockType.Mud : (byte)BlockType.Grass;
-        if (y > height - 4) return (byte)BlockType.Dirt;
-        return (byte)BlockType.Stone;
-    }
+        sw.Stop();
 
+        // 3. Formatted Output: Time | Chunk | Biome | Duration
+        string timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
+        Console.WriteLine($"[{timestamp}] | Chunk: {ChunkX,3},{ChunkZ,3} | Biome: {representativeBiome,-10} | Time: {sw.Elapsed.TotalMilliseconds,6:F3}ms | Ticks: {sw.ElapsedTicks,6}");
+    }
 
     private void AddGreedyFace(List<float> v, int x, int y, int z, int w, int d, bool isTop, byte type, float[] ao)
     {
@@ -87,11 +84,6 @@ public class Chunk
         Vector3 v1 = new Vector3(x + w, yPos, z);     // Bottom-Right
         Vector3 v2 = new Vector3(x + w, yPos, z + d); // Top-Right
         Vector3 v3 = new Vector3(x, yPos, z + d);     // Top-Left
-
-        // For TOP faces to be CCW (visible from above):
-        // Triangle 1: v0 -> v3 -> v2
-        // Triangle 2: v0 -> v2 -> v1
-        // (This is the reverse of what was likely happening)
 
         if (ao[0] + ao[2] < ao[1] + ao[3])
         {
