@@ -24,7 +24,6 @@ public class WorldManager
     }
     private void WorldStreamerLoop(Func<Vector3> getCameraPos)
     {
-        // Should be 31
         const int viewDistance = 31;
 
         while (true)
@@ -38,78 +37,62 @@ public class WorldManager
                 // 1. GLOBAL UNLOAD CHECK
                 foreach (var coord in _voxelWorld.Chunks.Keys)
                 {
-                    if (Math.Abs(coord.Item1 - pCX) > viewDistance ||
-                        Math.Abs(coord.Item2 - pCZ) > viewDistance)
+                    if (Math.Abs(coord.Item1 - pCX) > viewDistance || Math.Abs(coord.Item2 - pCZ) > viewDistance)
                     {
                         if (_voxelWorld.Chunks.TryRemove(coord, out _))
                         {
                             _unloadQueue.Enqueue(coord);
-                            // LOG: Identify exactly which chunk is being sent to the graveyard
-                            Console.WriteLine($"[WSL]: Enqueued Unload ({coord.Item1}, {coord.Item2}) | Total in Queue: {_unloadQueue.Count}");
                         }
                     }
                 }
 
-                // 2. SPIRAL LOAD
-                int x = 0, z = 0;
-                int dx = 0, dz = -1;
+                // 2. PRE-CALCULATE SPIRAL COORDS
+                // We collect the coordinates we need to check first so we can parallelize them
+                var loadTargets = new List<(int x, int z)>();
+                int sx = 0, sz = 0, dx = 0, dz = -1;
                 int sideLength = (viewDistance * 2) + 1;
                 int maxChunks = sideLength * sideLength;
-                int loadCount = 0;
 
                 for (int i = 0; i < maxChunks; i++)
                 {
-                    var coord = (pCX + x, pCZ + z);
+                    loadTargets.Add((pCX + sx, pCZ + sz));
+                    if (sx == sz || (sx < 0 && sx == -sz) || (sx > 0 && sx == 1 - sz))
+                    {
+                        int temp = dx; dx = -dz; dz = temp;
+                    }
+                    sx += dx; sz += dz;
+                }
 
-                    // RACE CONDITION PROTECTION:
-                    // If the chunk is in the unload queue, DO NOT try to load it yet.
-                    // We check if any item in the queue matches our target coordinate.
-                    bool pendingDelete = _unloadQueue.Any(q => q.x == coord.Item1 && q.z == coord.Item2);
+                // 3. PARALLEL BATCH LOAD
+                // This will use all CPU cores to blast through the noise math
+                Parallel.ForEach(loadTargets, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, coord =>
+                {
+                    bool pendingDelete = _unloadQueue.Any(q => q.x == coord.x && q.z == coord.z);
 
                     if (!_voxelWorld.Chunks.ContainsKey(coord) && !pendingDelete)
                     {
-                        var chunk = new Chunk(coord.Item1, coord.Item2, _voxelWorld);
+                        var chunk = new Chunk(coord.x, coord.z, _voxelWorld);
                         if (_voxelWorld.Chunks.TryAdd(coord, chunk))
                         {
-                            var n = _voxelWorld.GetNeighbors(coord.Item1, coord.Item2);
-
-                            // Mesh only if neighbors exist
-                            if (n.r != null && n.l != null && n.f != null && n.b != null)
-                                _onChunkReadyForMeshing(chunk);
-
+                            // Note: Meshing callbacks usually need to be handled carefully 
+                            // if they touch OpenGL, but since this is just flagging for meshing,
+                            // it should be safe if your MeshManager is thread-safe.
+                            var n = _voxelWorld.GetNeighbors(coord.x, coord.z);
+                            if (n.r != null && n.l != null && n.f != null && n.b != null) _onChunkReadyForMeshing(chunk);
                             if (n.r != null) _onChunkReadyForMeshing(n.r);
                             if (n.l != null) _onChunkReadyForMeshing(n.l);
                             if (n.f != null) _onChunkReadyForMeshing(n.f);
                             if (n.b != null) _onChunkReadyForMeshing(n.b);
-
-                            loadCount++;
                         }
                     }
-
-                    if (x == z || (x < 0 && x == -z) || (x > 0 && x == 1 - z))
-                    {
-                        int temp = dx; dx = -dz; dz = temp;
-                    }
-                    x += dx; z += dz;
-
-                    // Interruption check
-                    if (loadCount >= 10)
-                    {
-                        Vector3 currentPos = getCameraPos();
-                        if ((int)Math.Floor(currentPos.X / 16.0f) != pCX || (int)Math.Floor(currentPos.Z / 16.0f) != pCZ)
-                            break;
-
-                        Thread.Sleep(1);
-                        loadCount = 0;
-                    }
-                }
+                });
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[WSL ERROR]: {ex}");
             }
 
-            Thread.Sleep(10);
+            Thread.Sleep(500); // Wait longer between full-world scans
         }
     }
 
@@ -131,7 +114,7 @@ public class WorldManager
                         MeshManager.DeleteChunkMesh(gl, rc);
                         renderChunks.Remove(rc);
                     }
-                   // Console.WriteLine($"[MainThread]: Deleted {toRemove.Count} mesh(es) at ({coords.x}, {coords.z})");
+                    // Console.WriteLine($"[MainThread]: Deleted {toRemove.Count} mesh(es) at ({coords.x}, {coords.z})");
                 }
                 else
                 {
