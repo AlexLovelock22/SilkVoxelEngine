@@ -1,0 +1,20 @@
+#version 430 core
+
+// 4x8x4 = 128 threads. For a 16x256x16 chunk, we dispatch(4, 32, 4)
+layout (local_size_x = 4, local_size_y = 8, local_size_z = 4) in;
+
+// Use binding 0 to match your C# BindImageTexture call
+layout (r8, binding = 0) uniform image3D uVoxelGrid;
+
+uniform ivec3 uChunkOffset;
+
+void main() {
+    ivec3 lPos = ivec3(gl_GlobalInvocationID);
+    
+    if (lPos.x >= 16 || lPos.y >= 256 || lPos.z >= 16) return;
+
+    ivec3 gPos = lPos + uChunkOffset;
+
+    // Clear to 0 (Air)
+    imageStore(uVoxelGrid, gPos, vec4(0.0));
+}

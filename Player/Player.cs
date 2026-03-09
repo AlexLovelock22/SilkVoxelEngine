@@ -17,7 +17,8 @@ public class Player
     public float Pitch = 0f;
     public Vector3 CameraFront { get; private set; } = new Vector3(0, 0, -1);
     public Vector3 CameraUp => Vector3.UnitY;
-
+    // Add this to Player.cs near CameraFront
+    public Vector3 Forward => Vector3.Normalize(new Vector3(CameraFront.X, 0, CameraFront.Z));
 
     public float Height = 1.8f;
     public float Radius = 0.28f;

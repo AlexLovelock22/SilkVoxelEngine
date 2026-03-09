@@ -24,7 +24,7 @@ class Program
     private static IInputContext Input = null!;
     private static uint Shader;
     private static List<RenderChunk> _renderChunks = new List<RenderChunk>();
-    private static Player player = new Player(new Vector3(8, 200, 8));
+    private static Player player = new Player(new Vector3(8, 400, 8));
     private static Vector3 CameraPosition => player.GetEyePosition();
     private static Vector2 LastMousePos;
     private static double _timePassed;
@@ -55,6 +55,14 @@ class Program
     private static WorldManager _worldManager = null!;
     private static uint _globalVoxelTexture;
 
+
+
+    // Use a List so we can sort by distance every frame
+    private static List<(Vector3 pos, Action task)> _prioritizedPendingTasks = new();
+    private static readonly object _queueLock = new();
+    private static int _activeGenerationTasks = 0;
+    private const int MAX_CONCURRENT_TASKS = 8;
+
     static void Main(string[] args)
     {
         var options = WindowOptions.Default;
@@ -75,6 +83,7 @@ class Program
 
         window.Run();
     }
+
 
     private static unsafe void OnLoad()
     {
@@ -120,7 +129,7 @@ class Program
         File.Delete("BiomePreview_Organic.png");
         File.Delete("temp_map.png");
 
-        
+
         //  voxelWorld.ExportNoiseDebug("temp_map.png", 1024, 1024, 0, 0);
         string vertexCode = Path.Combine("Shaders", "shader.vert");
         string fragmentCode = Path.Combine("Shaders", "shader.frag");
@@ -133,15 +142,39 @@ class Program
         Stopwatch totalSw = Stopwatch.StartNew();
         InitShadowSystem();
         _worldManager = new WorldManager(voxelWorld, _unloadQueue, (chunk) =>
+{
+    long discoveryTime = Stopwatch.GetTimestamp();
+    // Calculate world position based on chunk coordinates and size
+    Vector3 chunkWorldPos = new Vector3(chunk.ChunkX * 16, 0, chunk.ChunkZ * 16);
+
+    Action generateTask = () =>
+    {
+        Interlocked.Increment(ref _activeGenerationTasks);
+        Task.Run(() =>
         {
-            Task.Run(() =>
+            try
             {
+                long startTime = Stopwatch.GetTimestamp();
                 var meshData = chunk.FillVertexData();
                 byte[] volumeData = PrecomputeVolumeData(chunk);
 
+                long endTime = Stopwatch.GetTimestamp();
+                float waitMs = (startTime - discoveryTime) * 1000f / Stopwatch.Frequency;
+                float workMs = (endTime - startTime) * 1000f / Stopwatch.Frequency;
+
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Chunk {chunk.ChunkX,3},{chunk.ChunkZ,3} | Wait: {waitMs,7:F1}ms | Work: {workMs,5:F1}ms");
+
                 _uploadQueue.Enqueue((chunk, meshData, volumeData));
-            });
+            }
+            finally { Interlocked.Decrement(ref _activeGenerationTasks); }
         });
+    };
+
+    lock (_queueLock)
+    {
+        _prioritizedPendingTasks.Add((chunkWorldPos, generateTask));
+    }
+});
 
         // Start the streaming thread via the manager helper
         _worldManager.StartStreaming(() => player.GetEyePosition());
@@ -301,29 +334,57 @@ class Program
     }
 
     // 2. Updated OnUpdate to handle unloading properly
+    private static int _lastPlayerChunkX = int.MinValue, _lastPlayerChunkZ = int.MinValue;
+
     private static void OnUpdate(double deltaTime)
     {
-        var keyboard = Input.Keyboards[0];
+        Vector3 pPos = player.GetEyePosition();
+        int pCX = (int)Math.Floor(pPos.X / 16.0f);
+        int pCZ = (int)Math.Floor(pPos.Z / 16.0f);
 
-        // Clean up GPU meshes for unloaded chunks
-        _worldManager.ProcessUnloadQueue(Gl, _renderChunks);
-
-        // NEW: We also need to clear the 3D texture area for unloaded chunks 
-        // so old shadows don't stay floating in the air!
-        while (_unloadQueue.TryDequeue(out var coords))
+        lock (_queueLock)
         {
-            MeshManager.ClearChunkInVoxelTexture(Gl, _globalVoxelTexture, coords.x, coords.z);
+            // Only clear if we actually moved to a DIFFERENT chunk
+            if (pCX != _lastPlayerChunkX || pCZ != _lastPlayerChunkZ)
+            {
+                // Increase this to 768 (ViewDistance + 256) so we don't 
+                // delete the chunks the player is currently looking at!
+                _prioritizedPendingTasks.RemoveAll(t =>
+                    Math.Abs(t.pos.X - pPos.X) > 768 ||
+                    Math.Abs(t.pos.Z - pPos.Z) > 768);
+
+                _lastPlayerChunkX = pCX;
+                _lastPlayerChunkZ = pCZ;
+            }
+
+            // 1. Maintain the Square Boundary (Matches your ViewDistance of 31 chunks)
+            // 31 chunks * 16 = 496 units. Let's use 512 for a clean buffer.
+            _prioritizedPendingTasks.RemoveAll(t =>
+                Math.Abs(t.pos.X - pPos.X) > 512 ||
+                Math.Abs(t.pos.Z - pPos.Z) > 512);
+
+            // 2. Sort by distance
+            _prioritizedPendingTasks.Sort((a, b) =>
+                Vector3.Distance(a.pos, pPos).CompareTo(Vector3.Distance(b.pos, pPos)));
+
+            // 3. Bleed the queue
+            while (_activeGenerationTasks < MAX_CONCURRENT_TASKS && _prioritizedPendingTasks.Count > 0)
+            {
+                var next = _prioritizedPendingTasks[0];
+                _prioritizedPendingTasks.RemoveAt(0);
+                next.task.Invoke();
+            }
         }
 
-        _timeManager.Update(deltaTime);
+        // IMPORTANT: Ensure these lines are still running! 
+        // If the GPU upload is skipped, the world stays invisible.
+        _worldManager.ProcessUnloadQueue(Gl, _renderChunks);
 
-        // Increase this slightly (e.g., 2 or 3) if generation is too slow
+        // This is the line that actually puts the chunks on your screen:
         MeshManager.ProcessUploadQueue(Gl, _globalVoxelTexture, _renderChunks, _uploadQueue, voxelWorld);
 
-        player.Update(deltaTime, keyboard, voxelWorld);
-        player.HandleInteraction(Input, voxelWorld, (float)deltaTime, Gl, _globalVoxelTexture);
-        UpdatePerformanceCounters(deltaTime);
-        _worldManager.UpdateDirtyChunks();
+        player.Update(deltaTime, Input.Keyboards[0], voxelWorld);
+        // ... rest of update
     }
 
     private static void DebugDrawVoxelSlice()

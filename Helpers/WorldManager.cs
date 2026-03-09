@@ -92,7 +92,7 @@ public class WorldManager
                 Console.WriteLine($"[WSL ERROR]: {ex}");
             }
 
-            Thread.Sleep(500); // Wait longer between full-world scans
+            Thread.Sleep(10); // Wait longer between full-world scans
         }
     }
 

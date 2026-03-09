@@ -1,0 +1,52 @@
+#version 430 core
+
+layout (local_size_x = 4, local_size_y = 8, local_size_z = 4) in;
+
+// Binding 1 for reading the grid
+layout (r8, binding = 1) uniform readonly image3D uVoxelGrid;
+
+struct Vertex {
+    vec3 position;
+    vec3 normal;
+    vec2 uv;
+    float ao;
+};
+
+// SSBOs for output
+layout (std430, binding = 0) buffer VertexBuffer { Vertex vertices[]; };
+layout (std430, binding = 1) buffer Counter { uint vertexCount; };
+
+uniform ivec3 uChunkOffset;
+uniform vec3 uWorldPos;
+
+bool isSolid(ivec3 pos) {
+    if (pos.y < 0 || pos.y > 255) return false;
+    return imageLoad(uVoxelGrid, pos).r > 0.5;
+}
+
+void emitFace(ivec3 lPos, vec3 normal, vec3 v1, vec3 v2, vec3 v3, vec3 v4) {
+    uint base = atomicAdd(vertexCount, 6);
+    vec3 p = vec3(lPos) + uWorldPos;
+
+    vertices[base + 0] = Vertex(p + v1, normal, vec2(0,0), 1.0);
+    vertices[base + 1] = Vertex(p + v2, normal, vec2(1,0), 1.0);
+    vertices[base + 2] = Vertex(p + v3, normal, vec2(1,1), 1.0);
+    vertices[base + 3] = Vertex(p + v1, normal, vec2(0,0), 1.0);
+    vertices[base + 4] = Vertex(p + v3, normal, vec2(1,1), 1.0);
+    vertices[base + 5] = Vertex(p + v4, normal, vec2(0,1), 1.0);
+}
+
+void main() {
+    ivec3 lPos = ivec3(gl_GlobalInvocationID);
+    if (lPos.x >= 16 || lPos.y >= 256 || lPos.z >= 16) return;
+
+    ivec3 gPos = lPos + uChunkOffset;
+    if (!isSolid(gPos)) return;
+
+    if (!isSolid(gPos + ivec3(0, 1, 0))) emitFace(lPos, vec3(0,1,0), vec3(0,1,0), vec3(1,1,0), vec3(1,1,1), vec3(0,1,1));
+    if (!isSolid(gPos + ivec3(0, -1, 0))) emitFace(lPos, vec3(0,-1,0), vec3(0,0,1), vec3(1,0,1), vec3(1,0,0), vec3(0,0,0));
+    if (!isSolid(gPos + ivec3(-1, 0, 0))) emitFace(lPos, vec3(-1,0,0), vec3(0,0,0), vec3(0,1,0), vec3(0,1,1), vec3(0,0,1));
+    if (!isSolid(gPos + ivec3(1, 0, 0))) emitFace(lPos, vec3(1,0,0), vec3(1,0,1), vec3(1,1,1), vec3(1,1,0), vec3(1,0,0));
+    if (!isSolid(gPos + ivec3(0, 0, 1))) emitFace(lPos, vec3(0,0,1), vec3(0,0,1), vec3(0,1,1), vec3(1,1,1), vec3(1,0,1));
+    if (!isSolid(gPos + ivec3(0, 0, -1))) emitFace(lPos, vec3(0,0,-1), vec3(1,0,0), vec3(1,1,0), vec3(0,1,0), vec3(0,0,0));
+}

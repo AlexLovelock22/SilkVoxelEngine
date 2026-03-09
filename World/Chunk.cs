@@ -69,7 +69,7 @@ public class Chunk
 
         // 3. Formatted Output: Time | Chunk | Biome | Duration
         string timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
-        Console.WriteLine($"[{timestamp}] | Chunk: {ChunkX,3},{ChunkZ,3} | Biome: {representativeBiome,-10} | Time: {sw.Elapsed.TotalMilliseconds,6:F3}ms | Ticks: {sw.ElapsedTicks,6}");
+        //Console.WriteLine($"[{timestamp}] | Chunk: {ChunkX,3},{ChunkZ,3} | Biome: {representativeBiome,-10} | Time: {sw.Elapsed.TotalMilliseconds,6:F3}ms | Ticks: {sw.ElapsedTicks,6}");
     }
 
     private void AddGreedyFace(List<float> v, int x, int y, int z, int w, int d, bool isTop, byte type, float[] ao)
@@ -284,18 +284,28 @@ public class Chunk
     // Inside Chunk.cs
     public (float[] opaque, float[] water) FillVertexData()
     {
-        List<float> opaqueBuffer = new List<float>();
-        List<float> waterBuffer = new List<float>();
+        Stopwatch sw = Stopwatch.StartNew();
+        long neighborTicks, loopTicks = 0, aoTicks = 0, bufferTicks = 0;
+
+        // Pre-sizing lists to prevent GC stalls and reallocations
+        List<float> opaqueBuffer = new List<float>(8192);
+        List<float> waterBuffer = new List<float>(1024);
 
         var n = _world.GetNeighbors(ChunkX, ChunkZ);
         Chunk? r = n.r; Chunk? l = n.l; Chunk? f = n.f; Chunk? b = n.b;
 
+        neighborTicks = sw.ElapsedTicks;
+        sw.Restart();
+
         int topFaceCount = 0;
         int totalVoxels = 0;
 
-        bool IsOpaque(int x, int y, int z)
+        // Optimization: Only loop up to the highest point in the chunk
+        int verticalLimit = Math.Min(Height - 1, _highestPoint + 1);
+
+        bool IsOpaqueLocal(int lx, int ly, int lz)
         {
-            byte id = GetBlockId(x, y, z, r, l, f, b);
+            byte id = Blocks[lx, ly, lz];
             return id != 0 && id != (byte)BlockType.Water;
         }
 
@@ -303,18 +313,21 @@ public class Chunk
         {
             for (int z = 0; z < Size; z++)
             {
-                for (int y = 0; y < Height; y++)
+                for (int y = 0; y <= verticalLimit; y++)
                 {
                     byte blockType = Blocks[x, y, z];
                     if (blockType == 0) continue;
                     totalVoxels++;
 
-                    bool up = !IsOpaque(x, y + 1, z);
-                    bool down = !IsOpaque(x, y - 1, z);
-                    bool left = !IsOpaque(x - 1, y, z);
-                    bool right = !IsOpaque(x + 1, y, z);
-                    bool front = !IsOpaque(x, y, z + 1);
-                    bool back = !IsOpaque(x, y, z - 1);
+                    long startCheck = sw.ElapsedTicks;
+                    // Visibility logic using fast local checks where possible
+                    bool up = (y + 1 < Height) ? !IsOpaqueLocal(x, y + 1, z) : true;
+                    bool down = (y - 1 >= 0) ? !IsOpaqueLocal(x, y - 1, z) : true;
+                    bool left = (x > 0) ? !IsOpaqueLocal(x - 1, y, z) : (l == null || GetBlockId(x - 1, y, z, r, l, f, b) == 0);
+                    bool right = (x < 15) ? !IsOpaqueLocal(x + 1, y, z) : (r == null || GetBlockId(x + 1, y, z, r, l, f, b) == 0);
+                    bool front = (z < 15) ? !IsOpaqueLocal(x, y, z + 1) : (f == null || GetBlockId(x, y, z + 1, r, l, f, b) == 0);
+                    bool back = (z > 0) ? !IsOpaqueLocal(x, y, z - 1) : (b == null || GetBlockId(x, y, z - 1, r, l, f, b) == 0);
+                    loopTicks += (sw.ElapsedTicks - startCheck);
 
                     if (blockType == (byte)BlockType.Water)
                     {
@@ -328,6 +341,7 @@ public class Chunk
                     {
                         if (!up && !down && !left && !right && !front && !back) continue;
 
+                        long startAO = sw.ElapsedTicks;
                         if (up)
                         {
                             AddGreedyFace(opaqueBuffer, x, y, z, 1, 1, true, blockType, CalculateFaceAO(x, y, z, "top", r, l, f, b));
@@ -338,17 +352,30 @@ public class Chunk
                         if (right) AddVerticalGreedySide(opaqueBuffer, x, y, z, 1, 1, blockType, CalculateFaceAO(x, y, z, "right", r, l, f, b));
                         if (front) AddVerticalGreedySide(opaqueBuffer, x, y, z, 1, 2, blockType, CalculateFaceAO(x, y, z, "front", r, l, f, b));
                         if (back) AddVerticalGreedySide(opaqueBuffer, x, y, z, 1, 3, blockType, CalculateFaceAO(x, y, z, "back", r, l, f, b));
+                        aoTicks += (sw.ElapsedTicks - startAO);
                     }
                 }
             }
         }
 
+        sw.Restart();
+        var result = (opaqueBuffer.ToArray(), waterBuffer.ToArray());
+        bufferTicks = sw.ElapsedTicks;
+
+        // Microsecond precision timestamp: HH:mm:ss.ffffff
+        string timestamp = DateTime.Now.ToString("HH:mm:ss.ffffff");
+        // Console.WriteLine($"[{timestamp}] [Perf Chunk {ChunkX,3},{ChunkZ,3}] " +
+            // $"Neighbors: {neighborTicks,4}t | " +
+            // $"Visibility: {loopTicks,6}t | " +
+            // $"AO+AddFace: {aoTicks,6}t | " +
+            // $"ToArray: {bufferTicks,5}t"); 
+
         if (topFaceCount == 0 && totalVoxels > 0)
         {
-            Console.WriteLine($"[FVD Warning] Chunk {ChunkX},{ChunkZ} has {totalVoxels} voxels but ZERO top faces generated.");
+          //  Console.WriteLine($"[FVD Warning] Chunk {ChunkX},{ChunkZ} has {totalVoxels} voxels but ZERO top faces generated.");
         }
 
-        return (opaqueBuffer.ToArray(), waterBuffer.ToArray());
+        return result;
     }
 
 

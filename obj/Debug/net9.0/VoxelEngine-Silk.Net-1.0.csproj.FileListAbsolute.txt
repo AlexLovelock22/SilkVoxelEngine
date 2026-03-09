@@ -42,3 +42,5 @@ C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\Shaders\skybox.frag
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\Shaders\skybox.vert
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\Shaders\sprite.frag
 C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\Shaders\sprite.vert
+C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\Shaders\voxel_mesh.comp
+C:\Users\kloak\VoxelEngine-Silk.Net-1.0\bin\Debug\net9.0\Shaders\voxel_volume.comp
