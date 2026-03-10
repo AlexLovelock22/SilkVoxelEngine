@@ -47,111 +47,102 @@ public class WorldManager
         Task.Factory.StartNew(() => WorldStreamerLoop(getCameraPos), TaskCreationOptions.LongRunning);
     }
 
+    public void ProcessUnloadQueue(GL gl, List<RenderChunk> renderChunks)
+    {
+        while (_unloadQueue.TryDequeue(out var coords))
+        {
+            // 1. ATOMIC REMOVAL
+            // We remove it from the dictionary here, on the Main Thread.
+            // This ensures no background thread is currently starting a new task for it.
+            if (_voxelWorld.Chunks.TryRemove(coords, out var chunk))
+            {
+                lock (renderChunks)
+                {
+                    // 2. Identify all meshes associated with these coordinates
+                    // We use .x and .z here because your WorldManager snippet uses those names
+                    var toRemove = renderChunks.Where(rc =>
+                        (int)Math.Floor(rc.WorldPosition.X / 16.0f) == coords.x &&
+                        (int)Math.Floor(rc.WorldPosition.Z / 16.0f) == coords.z).ToList();
+
+                    if (toRemove.Count > 0)
+                    {
+                        foreach (var rc in toRemove)
+                        {
+                            MeshManager.DeleteChunkMesh(gl, rc);
+                            renderChunks.Remove(rc);
+                        }
+                    }
+                    else
+                    {
+                        // If it wasn't in the render list yet, it was likely still in the loading queue.
+                        // By removing it from _voxelWorld.Chunks above, the worker thread will 
+                        // eventually see it's gone and skip the upload.
+                    }
+                }
+            }
+        }
+    }
+
     private void WorldStreamerLoop(Func<Vector3> getCameraPos)
     {
         const int viewDistance = 31;
+        // HYSTERESIS: Load at 31, but don't even queue for unload until 40.
+        // This stops the "ping-pong" effect when moving in circles.
+        const int unloadDistance = 40;
+
+        Vector3 lastScanPos = new Vector3(float.MinValue);
+        const float moveThreshold = 8.0f;
+
         while (true)
         {
             try
             {
                 Vector3 camPos = getCameraPos();
+                if (Vector3.Distance(camPos, lastScanPos) < moveThreshold)
+                {
+                    Thread.Sleep(100);
+                    continue;
+                }
+
+                lastScanPos = camPos;
                 int pCX = (int)Math.Floor(camPos.X / 16.0f);
                 int pCZ = (int)Math.Floor(camPos.Z / 16.0f);
 
-                // 1. SPIRAL DISCOVERY
-                // Starting from r=0 ensures the player's immediate chunk is always first.
-                for (int r = 0; r <= viewDistance; r++)
+                // 1. DISCOVERY
+                Parallel.For(-viewDistance, viewDistance + 1, x =>
                 {
-                    // SMARTER RE-CENTER: 
-                    // Only restart the spiral if we move more than 1 chunk away from where we started.
-                    // This gives the "wings" (outer rings) a chance to load before the loop resets.
-                    Vector3 currentPos = getCameraPos();
-                    int curCX = (int)Math.Floor(currentPos.X / 16f);
-                    int curCZ = (int)Math.Floor(currentPos.Z / 16f);
-
-                    if (curCX != pCX || curCZ != pCZ)
+                    for (int z = -viewDistance; z <= viewDistance; z++)
                     {
-                        // Update our anchor so the next iteration starts from the new center
-                        pCX = curCX;
-                        pCZ = curCZ;
-                        // We break to restart from r=0 to ensure the ground under us is solid
-                        break;
-                    }
-
-                    for (int x = -r; x <= r; x++)
-                    {
-                        for (int z = -r; z <= r; z++)
+                        var coord = (pCX + x, pCZ + z);
+                        if (!_voxelWorld.Chunks.ContainsKey(coord))
                         {
-                            // Perimeter check: only process the edges of the current ring
-                            if (Math.Abs(x) != r && Math.Abs(z) != r) continue;
-
-                            var coord = (pCX + x, pCZ + z);
-                            if (!_voxelWorld.Chunks.ContainsKey(coord))
+                            var chunk = new Chunk(coord.Item1, coord.Item2, _voxelWorld);
+                            if (_voxelWorld.Chunks.TryAdd(coord, chunk))
                             {
-                                var chunk = new Chunk(coord.Item1, coord.Item2, _voxelWorld);
-                                if (_voxelWorld.Chunks.TryAdd(coord, chunk))
-                                {
-                                    _onChunkReadyForMeshing(chunk);
-                                }
+                                _onChunkReadyForMeshing(chunk);
                             }
                         }
                     }
+                });
 
-                    // 2. UNLOAD CHECK (The "Garbage Collector")
-                    // Every 5 rings, scan for chunks that are now too far away
-                    if (r % 5 == 0)
+                // 2. QUEUE FOR UNLOAD
+                // We only add to the queue here. We DO NOT remove from the dictionary.
+                // Removal happens in ProcessUnloadQueue on the Main Thread.
+                foreach (var chunkPos in _voxelWorld.Chunks.Keys)
+                {
+                    if (Math.Abs(chunkPos.Item1 - pCX) > unloadDistance ||
+                        Math.Abs(chunkPos.Item2 - pCZ) > unloadDistance)
                     {
-                        foreach (var chunkPos in _voxelWorld.Chunks.Keys)
-                        {
-                            if (Math.Abs(chunkPos.Item1 - pCX) > viewDistance + 2 ||
-                                Math.Abs(chunkPos.Item2 - pCZ) > viewDistance + 2)
-                            {
-                                if (_voxelWorld.Chunks.TryRemove(chunkPos, out _))
-                                {
-                                    _unloadQueue.Enqueue(chunkPos);
-                                }
-                            }
-                        }
+                        _unloadQueue.Enqueue(chunkPos);
                     }
-
-                    // Performance Yield: Don't sleep during the first 5 rings (immediate ground)
-                    // but yield after that to keep the CPU from pinning.
-                    if (r > 5 && r % 10 == 0) Thread.Sleep(1);
                 }
             }
-            catch (Exception ex) { Console.WriteLine($"[WSL Error]: {ex.Message}"); }
-
-            Thread.Sleep(10);
-        }
-    }
-    
-    public void ProcessUnloadQueue(GL gl, List<RenderChunk> renderChunks)
-    {
-        while (_unloadQueue.TryDequeue(out var coords))
-        {
-            lock (renderChunks)
+            catch (Exception ex)
             {
-                // We use a predicate to find ALL instances of this chunk in the render list
-                var toRemove = renderChunks.Where(rc =>
-                    (int)Math.Floor(rc.WorldPosition.X / 16.0f) == coords.x &&
-                    (int)Math.Floor(rc.WorldPosition.Z / 16.0f) == coords.z).ToList();
-
-                if (toRemove.Count > 0)
-                {
-                    foreach (var rc in toRemove)
-                    {
-                        MeshManager.DeleteChunkMesh(gl, rc);
-                        renderChunks.Remove(rc);
-                    }
-                    // Console.WriteLine($"[MainThread]: Deleted {toRemove.Count} mesh(es) at ({coords.x}, {coords.z})");
-                }
-                else
-                {
-                    // This is where your 'trailing' chunks live. 
-                    // They aren't in renderChunks, but they might still be in the GPU.
-                    Console.WriteLine($"[MainThread]: CRITICAL - Ghost Chunk at ({coords.x}, {coords.z}) was not in the render list!");
-                }
+                Console.WriteLine($"[WSL Error]: {ex.Message}");
             }
+
+            Thread.Sleep(100);
         }
     }
 

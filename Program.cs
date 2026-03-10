@@ -142,68 +142,68 @@ class Program
         Stopwatch totalSw = Stopwatch.StartNew();
         InitShadowSystem();
         _worldManager = new WorldManager(voxelWorld, _unloadQueue, (chunk) =>
-{
-    long discoveryTime = Stopwatch.GetTimestamp();
-    Vector3 chunkWorldPos = new Vector3(chunk.ChunkX * 16, 0, chunk.ChunkZ * 16);
-    var coords = (chunk.ChunkX, chunk.ChunkZ);
-
-    lock (_queueLock)
-    {
-        // 1. DUPLICATE CHECK: Don't add if we are already working on it
-        if (_processingChunks.Contains(coords)) return;
-    }
-
-    // 2. DEFINE THE WORK (But don't start it yet!)
-    Action generateTask = () =>
-    {
-        // We move the thread management here so it's controlled by our loop
-        Interlocked.Increment(ref _activeGenerationTasks);
-
-        // Mark as processing
-        lock (_queueLock) { _processingChunks.Add(coords); }
-
-        Task.Run(() =>
         {
-            try
+            long discoveryTime = Stopwatch.GetTimestamp();
+            Vector3 chunkWorldPos = new Vector3(chunk.ChunkX * 16, 0, chunk.ChunkZ * 16);
+            var coords = (chunk.ChunkX, chunk.ChunkZ);
+
+            lock (_queueLock)
             {
-                long startTime = Stopwatch.GetTimestamp();
-
-                // CPU Heavy Work
-                var meshData = chunk.FillVertexData();
-                byte[] volumeData = PrecomputeVolumeData(chunk);
-
-                long endTime = Stopwatch.GetTimestamp();
-                float waitMs = (startTime - discoveryTime) * 1000f / Stopwatch.Frequency;
-                float workMs = (endTime - startTime) * 1000f / Stopwatch.Frequency;
-
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Chunk {chunk.ChunkX,3},{chunk.ChunkZ,3} | Wait: {waitMs,7:F1}ms | Work: {workMs,5:F1}ms");
-
-                _uploadQueue.Enqueue((chunk, meshData, volumeData));
+                // 1. DUPLICATE CHECK: Don't add if we are already working on it
+                if (_processingChunks.Contains(coords)) return;
             }
-            finally
+
+            // 2. DEFINE THE WORK (But don't start it yet!)
+            Action generateTask = () =>
             {
-                Interlocked.Decrement(ref _activeGenerationTasks);
-                lock (_queueLock) { _processingChunks.Remove(coords); }
+                // We move the thread management here so it's controlled by our loop
+                Interlocked.Increment(ref _activeGenerationTasks);
+
+                // Mark as processing
+                lock (_queueLock) { _processingChunks.Add(coords); }
+
+                Task.Run(() =>
+                {
+                    try
+                    {
+                        long startTime = Stopwatch.GetTimestamp();
+
+                        // CPU Heavy Work
+                        var meshData = chunk.FillVertexData();
+                        byte[] volumeData = PrecomputeVolumeData(chunk);
+
+                        long endTime = Stopwatch.GetTimestamp();
+                        float waitMs = (startTime - discoveryTime) * 1000f / Stopwatch.Frequency;
+                        float workMs = (endTime - startTime) * 1000f / Stopwatch.Frequency;
+
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Chunk {chunk.ChunkX,3},{chunk.ChunkZ,3} | Wait: {waitMs,7:F1}ms | Work: {workMs,5:F1}ms");
+
+                        _uploadQueue.Enqueue((chunk, meshData, volumeData));
+                    }
+                    finally
+                    {
+                        Interlocked.Decrement(ref _activeGenerationTasks);
+                        lock (_queueLock) { _processingChunks.Remove(coords); }
+                    }
+                });
+            };
+
+            // 3. PRIORITY ASSIGNMENT
+            float dist = Vector3.Distance(chunkWorldPos, player.GetEyePosition());
+
+            // Bypass queue only for the very closest chunks (within 2 chunks)
+            if (dist < 32)
+            {
+                generateTask.Invoke();
+            }
+            else
+            {
+                lock (_queueLock)
+                {
+                    _prioritizedPendingTasks.Add((chunkWorldPos, generateTask));
+                }
             }
         });
-    };
-
-    // 3. PRIORITY ASSIGNMENT
-    float dist = Vector3.Distance(chunkWorldPos, player.GetEyePosition());
-
-    // Bypass queue only for the very closest chunks (within 2 chunks)
-    if (dist < 32)
-    {
-        generateTask.Invoke();
-    }
-    else
-    {
-        lock (_queueLock)
-        {
-            _prioritizedPendingTasks.Add((chunkWorldPos, generateTask));
-        }
-    }
-});
         // Start the streaming thread via the manager helper
         _worldManager.StartStreaming(() => player.GetEyePosition());
 
@@ -373,6 +373,19 @@ class Program
         const int viewDist = 31;
         const float rangeThreshold = (viewDist + 2) * 16f;
 
+
+        _lastFps = 1.0 / deltaTime;
+        if (_frameCount % 1 == 0) // Update title every 30 frames to prevent flickering
+        {
+            // Get biome info from the player's current position
+            // Assuming your voxelWorld has a GetBiome method or similar
+            int chunkCount = _renderChunks.Count;
+
+            window.Title = $"Voxel Engine | FPS: {_lastFps:F0} | " +
+                           $"Pos: ({pPos.X:F1}, {pPos.Y:F1}, {pPos.Z:F1}) | " +
+                           $"Chunks: {chunkCount}";
+        }
+
         // Start a timer for the total scheduler block
         Stopwatch schedTimer = Stopwatch.StartNew();
         int purgedCount = 0;
@@ -403,6 +416,8 @@ class Program
                         Vector3.DistanceSquared(a.pos, pPos).CompareTo(Vector3.DistanceSquared(b.pos, pPos)));
                     didSort = true;
                 }
+
+
             }
 
             // 3. DISPATCH
@@ -440,7 +455,11 @@ class Program
         _worldManager.ProcessUnloadQueue(Gl, _renderChunks);
         MeshManager.ProcessUploadQueue(Gl, _globalVoxelTexture, _renderChunks, _uploadQueue, voxelWorld);
         player.Update(deltaTime, Input.Keyboards[0], voxelWorld);
+
+
     }
+
+
 
     private static void DebugDrawVoxelSlice()
     {
