@@ -50,9 +50,6 @@ public class WorldManager
     private void WorldStreamerLoop(Func<Vector3> getCameraPos)
     {
         const int viewDistance = 31;
-        int lastCX = int.MinValue;
-        int lastCZ = int.MinValue;
-
         while (true)
         {
             try
@@ -61,29 +58,31 @@ public class WorldManager
                 int pCX = (int)Math.Floor(camPos.X / 16.0f);
                 int pCZ = (int)Math.Floor(camPos.Z / 16.0f);
 
-                // 1. UNLOAD (Check every cycle)
-                foreach (var coord in _voxelWorld.Chunks.Keys)
-                {
-                    if (Math.Abs(coord.Item1 - pCX) > viewDistance || Math.Abs(coord.Item2 - pCZ) > viewDistance)
-                    {
-                        if (_voxelWorld.Chunks.TryRemove(coord, out _))
-                            _unloadQueue.Enqueue(coord);
-                    }
-                }
-
-                // 2. SPIRAL DISCOVERY
-                // We start r=0 every time. If pCX changes mid-loop, we want to know.
+                // 1. SPIRAL DISCOVERY
+                // Starting from r=0 ensures the player's immediate chunk is always first.
                 for (int r = 0; r <= viewDistance; r++)
                 {
-                    // RE-CENTER CHECK: If player moved to a new chunk, abort this spiral and start a new one!
+                    // SMARTER RE-CENTER: 
+                    // Only restart the spiral if we move more than 1 chunk away from where we started.
+                    // This gives the "wings" (outer rings) a chance to load before the loop resets.
                     Vector3 currentPos = getCameraPos();
-                    if ((int)Math.Floor(currentPos.X / 16f) != pCX || (int)Math.Floor(currentPos.Z / 16f) != pCZ)
+                    int curCX = (int)Math.Floor(currentPos.X / 16f);
+                    int curCZ = (int)Math.Floor(currentPos.Z / 16f);
+
+                    if (curCX != pCX || curCZ != pCZ)
+                    {
+                        // Update our anchor so the next iteration starts from the new center
+                        pCX = curCX;
+                        pCZ = curCZ;
+                        // We break to restart from r=0 to ensure the ground under us is solid
                         break;
+                    }
 
                     for (int x = -r; x <= r; x++)
                     {
                         for (int z = -r; z <= r; z++)
                         {
+                            // Perimeter check: only process the edges of the current ring
                             if (Math.Abs(x) != r && Math.Abs(z) != r) continue;
 
                             var coord = (pCX + x, pCZ + z);
@@ -91,17 +90,41 @@ public class WorldManager
                             {
                                 var chunk = new Chunk(coord.Item1, coord.Item2, _voxelWorld);
                                 if (_voxelWorld.Chunks.TryAdd(coord, chunk))
+                                {
                                     _onChunkReadyForMeshing(chunk);
+                                }
                             }
                         }
                     }
-                    if (r % 5 == 0) Thread.Sleep(1);
+
+                    // 2. UNLOAD CHECK (The "Garbage Collector")
+                    // Every 5 rings, scan for chunks that are now too far away
+                    if (r % 5 == 0)
+                    {
+                        foreach (var chunkPos in _voxelWorld.Chunks.Keys)
+                        {
+                            if (Math.Abs(chunkPos.Item1 - pCX) > viewDistance + 2 ||
+                                Math.Abs(chunkPos.Item2 - pCZ) > viewDistance + 2)
+                            {
+                                if (_voxelWorld.Chunks.TryRemove(chunkPos, out _))
+                                {
+                                    _unloadQueue.Enqueue(chunkPos);
+                                }
+                            }
+                        }
+                    }
+
+                    // Performance Yield: Don't sleep during the first 5 rings (immediate ground)
+                    // but yield after that to keep the CPU from pinning.
+                    if (r > 5 && r % 10 == 0) Thread.Sleep(1);
                 }
             }
-            catch (Exception ex) { Console.WriteLine($"[WSL ERROR]: {ex}"); }
-            Thread.Sleep(10); // High frequency check
+            catch (Exception ex) { Console.WriteLine($"[WSL Error]: {ex.Message}"); }
+
+            Thread.Sleep(10);
         }
     }
+    
     public void ProcessUnloadQueue(GL gl, List<RenderChunk> renderChunks)
     {
         while (_unloadQueue.TryDequeue(out var coords))

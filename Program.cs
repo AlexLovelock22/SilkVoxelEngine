@@ -368,33 +368,40 @@ class Program
     {
         Vector3 pPos = player.GetEyePosition();
         float speed = player.Velocity.Length();
+        _frameCount++;
 
-        // Use the same 31-chunk logic as the WorldManager
         const int viewDist = 31;
-        const float rangeThreshold = (viewDist + 2) * 16f; // +2 chunk buffer to prevent holes at edges
+        const float rangeThreshold = (viewDist + 2) * 16f;
+
+        // Start a timer for the total scheduler block
+        Stopwatch schedTimer = Stopwatch.StartNew();
+        int purgedCount = 0;
+        bool didSort = false;
 
         lock (_queueLock)
         {
             if (_prioritizedPendingTasks.Count > 0)
             {
-                // 1. THE SQUARE PURGE: Every 5 frames, kill tasks outside the 31x31 square
+                // 1. THE SQUARE PURGE
                 if (_frameCount % 5 == 0)
                 {
+                    int before = _prioritizedPendingTasks.Count;
                     _prioritizedPendingTasks.RemoveAll(t =>
                     {
                         float dx = Math.Abs(t.pos.X - pPos.X);
                         float dz = Math.Abs(t.pos.Z - pPos.Z);
-                        // If the task is outside the player's square + buffer, delete it
                         return dx > rangeThreshold || dz > rangeThreshold;
                     });
+                    purgedCount = before - _prioritizedPendingTasks.Count;
                 }
 
-                // 2. SORT: Every 2 frames if moving, 10 if still.
+                // 2. SORT
                 bool shouldSort = (speed > 0.1f && _frameCount % 2 == 0) || (_frameCount % 10 == 0);
                 if (shouldSort)
                 {
                     _prioritizedPendingTasks.Sort((a, b) =>
                         Vector3.DistanceSquared(a.pos, pPos).CompareTo(Vector3.DistanceSquared(b.pos, pPos)));
+                    didSort = true;
                 }
             }
 
@@ -407,7 +414,6 @@ class Program
                 _prioritizedPendingTasks.RemoveAt(0);
 
                 Interlocked.Increment(ref _activeGenerationTasks);
-
                 Task.Run(() =>
                 {
                     try
@@ -420,6 +426,15 @@ class Program
                     }
                 });
             }
+        }
+
+        schedTimer.Stop();
+
+        // 4. TELEMETRY LOGGING
+        // Only log if we are actually doing work or if the scheduler is taking too long (> 2ms)
+        if (_frameCount % 60 == 0 || (speed > 0.1f && schedTimer.Elapsed.TotalMilliseconds > 2.0))
+        {
+            Console.WriteLine($"[Scheduler] Time: {schedTimer.Elapsed.TotalMilliseconds:F2}ms | Queue: {_prioritizedPendingTasks.Count} | Active: {_activeGenerationTasks} | Purged: {purgedCount} | Sorted: {didSort}");
         }
 
         _worldManager.ProcessUnloadQueue(Gl, _renderChunks);
