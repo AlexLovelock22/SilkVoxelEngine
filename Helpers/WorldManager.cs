@@ -20,11 +20,38 @@ public class WorldManager
 
     public void StartStreaming(Func<Vector3> getCameraPos)
     {
-        Task.Run(() => WorldStreamerLoop(getCameraPos));
+        // 1. Get initial position
+        Vector3 camPos = getCameraPos();
+        int pCX = (int)Math.Floor(camPos.X / 16.0f);
+        int pCZ = (int)Math.Floor(camPos.Z / 16.0f);
+        const int viewDistance = 31;
+
+        // 2. IMMEDIATE COLD START (The Burst)
+        for (int x = -viewDistance; x <= viewDistance; x++)
+        {
+            for (int z = -viewDistance; z <= viewDistance; z++)
+            {
+                var coord = (pCX + x, pCZ + z);
+                if (!_voxelWorld.Chunks.ContainsKey(coord))
+                {
+                    var chunk = new Chunk(coord.Item1, coord.Item2, _voxelWorld);
+                    if (_voxelWorld.Chunks.TryAdd(coord, chunk))
+                    {
+                        _onChunkReadyForMeshing(chunk);
+                    }
+                }
+            }
+        }
+
+        // 3. Start the continuous background maintenance
+        Task.Factory.StartNew(() => WorldStreamerLoop(getCameraPos), TaskCreationOptions.LongRunning);
     }
+
     private void WorldStreamerLoop(Func<Vector3> getCameraPos)
     {
         const int viewDistance = 31;
+        int lastCX = int.MinValue;
+        int lastCZ = int.MinValue;
 
         while (true)
         {
@@ -34,68 +61,47 @@ public class WorldManager
                 int pCX = (int)Math.Floor(camPos.X / 16.0f);
                 int pCZ = (int)Math.Floor(camPos.Z / 16.0f);
 
-                // 1. GLOBAL UNLOAD CHECK
+                // 1. UNLOAD (Check every cycle)
                 foreach (var coord in _voxelWorld.Chunks.Keys)
                 {
                     if (Math.Abs(coord.Item1 - pCX) > viewDistance || Math.Abs(coord.Item2 - pCZ) > viewDistance)
                     {
                         if (_voxelWorld.Chunks.TryRemove(coord, out _))
-                        {
                             _unloadQueue.Enqueue(coord);
-                        }
                     }
                 }
 
-                // 2. PRE-CALCULATE SPIRAL COORDS
-                // We collect the coordinates we need to check first so we can parallelize them
-                var loadTargets = new List<(int x, int z)>();
-                int sx = 0, sz = 0, dx = 0, dz = -1;
-                int sideLength = (viewDistance * 2) + 1;
-                int maxChunks = sideLength * sideLength;
-
-                for (int i = 0; i < maxChunks; i++)
+                // 2. SPIRAL DISCOVERY
+                // We start r=0 every time. If pCX changes mid-loop, we want to know.
+                for (int r = 0; r <= viewDistance; r++)
                 {
-                    loadTargets.Add((pCX + sx, pCZ + sz));
-                    if (sx == sz || (sx < 0 && sx == -sz) || (sx > 0 && sx == 1 - sz))
-                    {
-                        int temp = dx; dx = -dz; dz = temp;
-                    }
-                    sx += dx; sz += dz;
-                }
+                    // RE-CENTER CHECK: If player moved to a new chunk, abort this spiral and start a new one!
+                    Vector3 currentPos = getCameraPos();
+                    if ((int)Math.Floor(currentPos.X / 16f) != pCX || (int)Math.Floor(currentPos.Z / 16f) != pCZ)
+                        break;
 
-                // 3. PARALLEL BATCH LOAD
-                // This will use all CPU cores to blast through the noise math
-                Parallel.ForEach(loadTargets, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, coord =>
-                {
-                    bool pendingDelete = _unloadQueue.Any(q => q.x == coord.x && q.z == coord.z);
-
-                    if (!_voxelWorld.Chunks.ContainsKey(coord) && !pendingDelete)
+                    for (int x = -r; x <= r; x++)
                     {
-                        var chunk = new Chunk(coord.x, coord.z, _voxelWorld);
-                        if (_voxelWorld.Chunks.TryAdd(coord, chunk))
+                        for (int z = -r; z <= r; z++)
                         {
-                            // Note: Meshing callbacks usually need to be handled carefully 
-                            // if they touch OpenGL, but since this is just flagging for meshing,
-                            // it should be safe if your MeshManager is thread-safe.
-                            var n = _voxelWorld.GetNeighbors(coord.x, coord.z);
-                            if (n.r != null && n.l != null && n.f != null && n.b != null) _onChunkReadyForMeshing(chunk);
-                            if (n.r != null) _onChunkReadyForMeshing(n.r);
-                            if (n.l != null) _onChunkReadyForMeshing(n.l);
-                            if (n.f != null) _onChunkReadyForMeshing(n.f);
-                            if (n.b != null) _onChunkReadyForMeshing(n.b);
+                            if (Math.Abs(x) != r && Math.Abs(z) != r) continue;
+
+                            var coord = (pCX + x, pCZ + z);
+                            if (!_voxelWorld.Chunks.ContainsKey(coord))
+                            {
+                                var chunk = new Chunk(coord.Item1, coord.Item2, _voxelWorld);
+                                if (_voxelWorld.Chunks.TryAdd(coord, chunk))
+                                    _onChunkReadyForMeshing(chunk);
+                            }
                         }
                     }
-                });
+                    if (r % 5 == 0) Thread.Sleep(1);
+                }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[WSL ERROR]: {ex}");
-            }
-
-            Thread.Sleep(10); // Wait longer between full-world scans
+            catch (Exception ex) { Console.WriteLine($"[WSL ERROR]: {ex}"); }
+            Thread.Sleep(10); // High frequency check
         }
     }
-
     public void ProcessUnloadQueue(GL gl, List<RenderChunk> renderChunks)
     {
         while (_unloadQueue.TryDequeue(out var coords))

@@ -24,7 +24,7 @@ class Program
     private static IInputContext Input = null!;
     private static uint Shader;
     private static List<RenderChunk> _renderChunks = new List<RenderChunk>();
-    private static Player player = new Player(new Vector3(8, 400, 8));
+    private static Player player = new Player(new Vector3(8, 800, 8));
     private static Vector3 CameraPosition => player.GetEyePosition();
     private static Vector2 LastMousePos;
     private static double _timePassed;
@@ -55,7 +55,7 @@ class Program
     private static WorldManager _worldManager = null!;
     private static uint _globalVoxelTexture;
 
-
+    private static HashSet<(int, int)> _processingChunks = new();
 
     // Use a List so we can sort by distance every frame
     private static List<(Vector3 pos, Action task)> _prioritizedPendingTasks = new();
@@ -144,17 +144,31 @@ class Program
         _worldManager = new WorldManager(voxelWorld, _unloadQueue, (chunk) =>
 {
     long discoveryTime = Stopwatch.GetTimestamp();
-    // Calculate world position based on chunk coordinates and size
     Vector3 chunkWorldPos = new Vector3(chunk.ChunkX * 16, 0, chunk.ChunkZ * 16);
+    var coords = (chunk.ChunkX, chunk.ChunkZ);
 
+    lock (_queueLock)
+    {
+        // 1. DUPLICATE CHECK: Don't add if we are already working on it
+        if (_processingChunks.Contains(coords)) return;
+    }
+
+    // 2. DEFINE THE WORK (But don't start it yet!)
     Action generateTask = () =>
     {
+        // We move the thread management here so it's controlled by our loop
         Interlocked.Increment(ref _activeGenerationTasks);
+
+        // Mark as processing
+        lock (_queueLock) { _processingChunks.Add(coords); }
+
         Task.Run(() =>
         {
             try
             {
                 long startTime = Stopwatch.GetTimestamp();
+
+                // CPU Heavy Work
                 var meshData = chunk.FillVertexData();
                 byte[] volumeData = PrecomputeVolumeData(chunk);
 
@@ -166,16 +180,30 @@ class Program
 
                 _uploadQueue.Enqueue((chunk, meshData, volumeData));
             }
-            finally { Interlocked.Decrement(ref _activeGenerationTasks); }
+            finally
+            {
+                Interlocked.Decrement(ref _activeGenerationTasks);
+                lock (_queueLock) { _processingChunks.Remove(coords); }
+            }
         });
     };
 
-    lock (_queueLock)
+    // 3. PRIORITY ASSIGNMENT
+    float dist = Vector3.Distance(chunkWorldPos, player.GetEyePosition());
+
+    // Bypass queue only for the very closest chunks (within 2 chunks)
+    if (dist < 32)
     {
-        _prioritizedPendingTasks.Add((chunkWorldPos, generateTask));
+        generateTask.Invoke();
+    }
+    else
+    {
+        lock (_queueLock)
+        {
+            _prioritizedPendingTasks.Add((chunkWorldPos, generateTask));
+        }
     }
 });
-
         // Start the streaming thread via the manager helper
         _worldManager.StartStreaming(() => player.GetEyePosition());
 
@@ -339,52 +367,64 @@ class Program
     private static void OnUpdate(double deltaTime)
     {
         Vector3 pPos = player.GetEyePosition();
-        int pCX = (int)Math.Floor(pPos.X / 16.0f);
-        int pCZ = (int)Math.Floor(pPos.Z / 16.0f);
+        float speed = player.Velocity.Length();
+
+        // Use the same 31-chunk logic as the WorldManager
+        const int viewDist = 31;
+        const float rangeThreshold = (viewDist + 2) * 16f; // +2 chunk buffer to prevent holes at edges
 
         lock (_queueLock)
         {
-            // Only clear if we actually moved to a DIFFERENT chunk
-            if (pCX != _lastPlayerChunkX || pCZ != _lastPlayerChunkZ)
+            if (_prioritizedPendingTasks.Count > 0)
             {
-                // Increase this to 768 (ViewDistance + 256) so we don't 
-                // delete the chunks the player is currently looking at!
-                _prioritizedPendingTasks.RemoveAll(t =>
-                    Math.Abs(t.pos.X - pPos.X) > 768 ||
-                    Math.Abs(t.pos.Z - pPos.Z) > 768);
+                // 1. THE SQUARE PURGE: Every 5 frames, kill tasks outside the 31x31 square
+                if (_frameCount % 5 == 0)
+                {
+                    _prioritizedPendingTasks.RemoveAll(t =>
+                    {
+                        float dx = Math.Abs(t.pos.X - pPos.X);
+                        float dz = Math.Abs(t.pos.Z - pPos.Z);
+                        // If the task is outside the player's square + buffer, delete it
+                        return dx > rangeThreshold || dz > rangeThreshold;
+                    });
+                }
 
-                _lastPlayerChunkX = pCX;
-                _lastPlayerChunkZ = pCZ;
+                // 2. SORT: Every 2 frames if moving, 10 if still.
+                bool shouldSort = (speed > 0.1f && _frameCount % 2 == 0) || (_frameCount % 10 == 0);
+                if (shouldSort)
+                {
+                    _prioritizedPendingTasks.Sort((a, b) =>
+                        Vector3.DistanceSquared(a.pos, pPos).CompareTo(Vector3.DistanceSquared(b.pos, pPos)));
+                }
             }
 
-            // 1. Maintain the Square Boundary (Matches your ViewDistance of 31 chunks)
-            // 31 chunks * 16 = 496 units. Let's use 512 for a clean buffer.
-            _prioritizedPendingTasks.RemoveAll(t =>
-                Math.Abs(t.pos.X - pPos.X) > 512 ||
-                Math.Abs(t.pos.Z - pPos.Z) > 512);
+            // 3. DISPATCH
+            int threadCap = (speed < 0.1f) ? 64 : 12;
 
-            // 2. Sort by distance
-            _prioritizedPendingTasks.Sort((a, b) =>
-                Vector3.Distance(a.pos, pPos).CompareTo(Vector3.Distance(b.pos, pPos)));
-
-            // 3. Bleed the queue
-            while (_activeGenerationTasks < MAX_CONCURRENT_TASKS && _prioritizedPendingTasks.Count > 0)
+            while (_activeGenerationTasks < threadCap && _prioritizedPendingTasks.Count > 0)
             {
                 var next = _prioritizedPendingTasks[0];
                 _prioritizedPendingTasks.RemoveAt(0);
-                next.task.Invoke();
+
+                Interlocked.Increment(ref _activeGenerationTasks);
+
+                Task.Run(() =>
+                {
+                    try
+                    {
+                        next.task.Invoke();
+                    }
+                    finally
+                    {
+                        Interlocked.Decrement(ref _activeGenerationTasks);
+                    }
+                });
             }
         }
 
-        // IMPORTANT: Ensure these lines are still running! 
-        // If the GPU upload is skipped, the world stays invisible.
         _worldManager.ProcessUnloadQueue(Gl, _renderChunks);
-
-        // This is the line that actually puts the chunks on your screen:
         MeshManager.ProcessUploadQueue(Gl, _globalVoxelTexture, _renderChunks, _uploadQueue, voxelWorld);
-
         player.Update(deltaTime, Input.Keyboards[0], voxelWorld);
-        // ... rest of update
     }
 
     private static void DebugDrawVoxelSlice()
